@@ -33,7 +33,7 @@ class JointModel:
         step_size: float = 1.0,
         accept_step_size: float = 0.1,
         accept_target: float = 0.234,
-        n_quad: int = 32,
+        n_quad: int = 64,
         n_bissect: int = 16,
     ):
         self.h = h
