@@ -5,9 +5,6 @@ import pandas as pd
 import torch
 from torch.optim import Adam
 
-from scipy.stats import norm
-from scipy.optimize import minimize_scalar
-
 from tqdm import tqdm
 
 from collections import defaultdict
