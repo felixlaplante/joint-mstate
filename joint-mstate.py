@@ -1,11 +1,15 @@
-import numpy as np
-import torch
 import matplotlib.pyplot as plt
+
+import numpy as np
+import pandas as pd
+import torch
 from torch.optim import Adam
-from tqdm import tqdm
+
 from scipy.stats import norm
 from scipy.optimize import minimize_scalar
-import pandas as pd
+
+from tqdm import tqdm
+
 from collections import defaultdict
 
 
@@ -26,36 +30,39 @@ class JointModel:
 
     def __init__(
         self,
-        h: Fun,
-        f: Fun,
-        surv: dict,
-        K: float = 10.0,
-        step_size: float = 1.0,
-        accept_step_size: float = 0.1,
-        accept_target: float = 0.234,
-        n_quad: int = 64,
-        n_bissect: int = 16,
+        h,
+        f,
+        surv,
+        K=10.0,
+        step_size=1.0,
+        accept_step_size=0.1,
+        accept_target=0.234,
+        n_quad=32,
+        n_bissect=16,
     ):
         self.h = h
         self.f = f
         self.surv = surv
+
         self.K = torch.tensor(K, dtype=torch.float32)
         self.step_size = torch.tensor(step_size, dtype=torch.float32)
         self.accept_step_size = torch.tensor(accept_step_size, dtype=torch.float32)
         self.accept_target = torch.tensor(accept_target, dtype=torch.float32)
+
         nodes, weights = np.polynomial.legendre.leggauss(n_quad)
         self.std_nodes = torch.tensor(nodes, dtype=torch.float32)
         self.std_weights = torch.tensor(weights, dtype=torch.float32)
+
         self.n_bissect = n_bissect
+
         self.fit_ = False
 
     @torch.compile
     def _log_hazard(self, t0, t1, x, psi, alpha, beta, log_lambda0, g, reset):
         base = log_lambda0(t1 - t0) if reset else log_lambda0(t1)
         mod = g(t1, x, psi)
-        return (
-            base + torch.einsum("ijk,k->ij", mod, alpha) + x.matmul(beta).unsqueeze(1)
-        )
+
+        return base + torch.einsum("ijk,k->ij", mod, alpha) + x @ beta.unsqueeze(1)
 
     @torch.compile
     def _cum_hazard(self, t0, t1, x, psi, alpha, beta, log_lambda0, g, reset):
@@ -66,14 +73,15 @@ class JointModel:
         vals = torch.exp(
             self._log_hazard(t0, ts, x, psi, alpha, beta, log_lambda0, g, reset)
         )
-        return half.flatten() * (vals * self.std_weights).sum(1)
+
+        return half.flatten() * (vals * self.std_weights).sum(dim=1)
 
     @torch.compile
     def _hazard_ll(self, psi):
         ll = torch.zeros(self.n)
 
         for d, info in self.trans.items():
-            alpha, beta = self.alpha[d], self.beta[d]
+            alpha, beta = self.params["alpha"][d], self.params["beta"][d]
             idx, t0, t1 = info["idx"], info["t0"], info["t1"]
             trans_ll = self._log_hazard(
                 t0,
@@ -86,7 +94,7 @@ class JointModel:
             ).flatten()
             ll.scatter_add_(0, idx, trans_ll)
         for d, info in self.alts.items():
-            alpha, beta = self.alpha[d], self.beta[d]
+            alpha, beta = self.params["alpha"][d], self.params["beta"][d]
             idx, t0, t1 = info["idx"], info["t0"], info["t1"]
             alts_ll = -self._cum_hazard(
                 t0, t1, self.x[idx], psi[idx], alpha, beta, **self.surv[d]
@@ -97,22 +105,25 @@ class JointModel:
     @torch.compile
     def _long_ll(self, psi):
         diff = self.y - self.h(self.t, self.x, psi)
-        R_inv = torch.exp(-self.log_R)
-        log_det_R = self.log_R.sum()
+        R_inv = torch.exp(-self.params["log_R"])
+        log_det_R = self.params["log_R"].sum()
         quad_form = torch.einsum("ijk,k,ijk->i", diff, R_inv, diff)
+
         return -0.5 * log_det_R * diff.shape[1] - 0.5 * quad_form
 
     @torch.compile
     def _pr_ll(self, b):
-        diff = b - self.mu
-        Q_inv = torch.exp(-self.log_Q)
-        log_det_Q = torch.sum(self.log_Q)
+        diff = b - self.params["mu"]
+        Q_inv = torch.exp(-self.params["log_Q"])
+        log_det_Q = self.params["log_Q"].sum()
         quad_form = torch.einsum("ij,j,ij->i", diff, Q_inv, diff)
+
         return -0.5 * log_det_Q - 0.5 * quad_form
 
     @torch.compile
     def _ll(self, b):
-        psi = self.f(self.gamma, b)
+        psi = self.f(self.params["gamma"], b)
+
         return self._long_ll(psi) + self._hazard_ll(psi) + self._pr_ll(b)
 
     def _mh(self, curr_b, curr_ll):
@@ -127,6 +138,7 @@ class JointModel:
             (accept.to(torch.float32).mean() - self.accept_target)
             * self.accept_step_size
         )
+
         return curr_b, curr_ll
 
     def _mcmc(self, curr_b, curr_ll, burn_in, batch_size):
@@ -143,7 +155,7 @@ class JointModel:
                 curr_ll.detach(),
             )
             ll += curr_ll.sum()
-        return curr_b, curr_ll, ll / batch_size
+        return ll / batch_size, curr_b, curr_ll
 
     def _build_trans(self, T):
         surv = set(self.surv)
@@ -210,34 +222,35 @@ class JointModel:
         self.C = C
         self.n, self.p = x.shape
 
-        self.gamma = torch.zeros(self.f.input_dim[0], requires_grad=True)
-        self.mu = torch.zeros(self.f.input_dim[1], requires_grad=True)
-        self.log_Q = torch.zeros(self.f.input_dim[1], requires_grad=True)
-        self.log_R = torch.zeros(self.h.output_dim, requires_grad=True)
-        self.alpha = {
+        self.params = {}
+        self.params["gamma"] = torch.zeros(self.f.input_dim[0], requires_grad=True)
+        self.params["mu"] = torch.zeros(self.f.input_dim[1], requires_grad=True)
+        self.params["log_Q"] = torch.zeros(self.f.input_dim[1], requires_grad=True)
+        self.params["log_R"] = torch.zeros(self.h.output_dim, requires_grad=True)
+        self.params["alpha"] = {
             key: torch.zeros(self.surv[key]["g"].output_dim, requires_grad=True)
             for key in self.surv.keys()
         }
-        self.beta = {
-            key: torch.zeros(p, requires_grad=True) for key in self.surv.keys()
+        self.params["beta"] = {
+            key: torch.zeros(self.p, requires_grad=True) for key in self.surv.keys()
         }
 
-        params = (
-            [self.gamma, self.mu, self.log_Q, self.log_R]
-            + list(self.alpha.values())
-            + list(self.beta.values())
-        )
+        params = [v for v in self.params.values() if not isinstance(v, dict)]
+        params += [
+            *self.params["alpha"].values(),
+            *self.params["beta"].values(),
+        ]
         optimizer = optimizer(params=params, lr=lr)
 
         burn_in = int(torch.ceil(self.K).item())
-        curr_b = self.mu.detach().repeat(self.n, 1)
+        curr_b = self.params["mu"].detach().repeat(self.n, 1)
         curr_ll = torch.full((self.n,), -torch.inf)
 
         self.trans = self._build_trans(T)
         self.alts = self._build_alts(T, C)
 
         for _ in tqdm(range(n_iter), "Fitting..."):
-            curr_b, curr_ll, ll = self._mcmc(curr_b, curr_ll, burn_in, batch_size)
+            ll, curr_b, curr_ll = self._mcmc(curr_b, curr_ll, burn_in, batch_size)
             nll = -ll
 
             params_before = [p.detach().clone() for p in params]
@@ -322,8 +335,9 @@ class JointModel:
                 ),
                 torch.inf,
             )
+
             for j, (d, info) in enumerate(last_alts.items()):
-                alpha, beta = self.alpha[d], self.beta[d]
+                alpha, beta = self.params["alpha"][d], self.params["beta"][d]
 
                 idx, t0, t1 = info["idx"], info["t0"], info["t1"]
                 t_sample = self._sample(
@@ -336,6 +350,7 @@ class JointModel:
                     **self.surv[d],
                     t_surv=t_surv[idx] if not i and t_surv is not None else None,
                 )
+
                 t_cand[:, j].scatter_(0, idx, t_sample)
             min_t, argmin_t = torch.min(t_cand, dim=1)
             valid = torch.nonzero(torch.isfinite(min_t)).flatten()
@@ -356,15 +371,18 @@ class JointModel:
         assert self.fit_
 
         dummy_jm = JointModel(self.h, self.f, self.surv)
-        dummy_jm.gamma = self.gamma.detach().clone()
-        dummy_jm.mu = self.mu.detach().clone()
-        dummy_jm.log_Q = self.log_Q.detach().clone()
-        dummy_jm.log_R = self.log_R.detach().clone()
-        dummy_jm.alpha = {
-            key: self.alpha[key].detach().clone() for key in self.alpha.keys()
+        dummy_jm.params = {
+            k: v.detach().clone()
+            for k, v in self.params.items()
+            if not isinstance(v, dict)
         }
-        dummy_jm.beta = {
-            key: self.beta[key].detach().clone() for key in self.beta.keys()
+        dummy_jm.params["alpha"] = {
+            key: self.params["alpha"][key].detach().clone()
+            for key in self.params["alpha"].keys()
+        }
+        dummy_jm.params["beta"] = {
+            key: self.params["beta"][key].detach().clone()
+            for key in self.params["beta"].keys()
         }
 
         dummy_jm.x = torch.as_tensor(x, dtype=torch.float32)
@@ -377,7 +395,7 @@ class JointModel:
         dummy_jm.trans = self._build_trans(T)
         dummy_jm.alts = self._build_alts(T, C)
 
-        curr_b = dummy_jm.mu.repeat(dummy_jm.n, 1)
+        curr_b = dummy_jm.params["mu"].repeat(dummy_jm.n, 1)
         curr_ll = torch.full((dummy_jm.n,), -torch.inf)
 
         T_pred = []
@@ -390,11 +408,15 @@ class JointModel:
             T_pred.append(
                 [
                     dummy_jm.sample(
-                        T, t_max, x, dummy_jm.f(dummy_jm.gamma, curr_b), C, max_iter
+                        T,
+                        t_max,
+                        x,
+                        dummy_jm.f(dummy_jm.params["gamma"], curr_b),
+                        C,
+                        max_iter,
                     )
                     for _ in range(n_samples)
                 ]
             )
-
         del dummy_jm
         return T_pred
