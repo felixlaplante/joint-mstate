@@ -96,11 +96,13 @@ class JointModel:
     @torch.compile
     def _long_ll(self, psi):
         diff = self.y - self.h(self.t, self.x, psi)
+        n_valid = (~torch.isnan(diff)).any(dim=2).sum(dim=1)
+        diff = torch.nan_to_num(diff)
         R_inv = torch.exp(-self.params["log_R"])
         log_det_R = self.params["log_R"].sum()
-        quad_form = torch.einsum("ijk,k,ijk->ij", diff, R_inv, diff)
+        quad_form = torch.einsum("ijk,k,ijk->i", diff, R_inv, diff)
 
-        return -0.5 * torch.nansum(log_det_R + quad_form, dim=1)
+        return -0.5 * (log_det_R * n_valid + quad_form)
 
     @torch.compile
     def _pr_ll(self, b):
@@ -411,3 +413,4 @@ class JointModel:
             )
         del dummy_jm
         return T_pred
+
