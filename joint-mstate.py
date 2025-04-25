@@ -98,9 +98,9 @@ class JointModel:
         diff = self.y - self.h(self.t, self.x, psi)
         R_inv = torch.exp(-self.params["log_R"])
         log_det_R = self.params["log_R"].sum()
-        quad_form = torch.einsum("ijk,k,ijk->i", diff, R_inv, diff)
+        quad_form = torch.einsum("ijk,k,ijk->ij", diff, R_inv, diff)
 
-        return -0.5 * log_det_R * diff.shape[1] - 0.5 * quad_form
+        return -0.5 * torch.nansum(log_det_R + quad_form, dim=1)
 
     @torch.compile
     def _pr_ll(self, b):
@@ -109,7 +109,7 @@ class JointModel:
         log_det_Q = self.params["log_Q"].sum()
         quad_form = torch.einsum("ij,j,ij->i", diff, Q_inv, diff)
 
-        return -0.5 * log_det_Q - 0.5 * quad_form
+        return -0.5 * (log_det_Q + quad_form)
 
     @torch.compile
     def _ll(self, b):
