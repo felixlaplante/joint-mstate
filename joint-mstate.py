@@ -8,7 +8,7 @@ class Fun:
     """A simple callable wrapper for a function with specified input and output dimensions."""
 
     def __init__(self, fun, input_dim, output_dim):
-        self.fun = torch.compile(fun)
+        self.fun = fun
         self.input_dim = input_dim
         self.output_dim = output_dim
 
@@ -48,14 +48,14 @@ class JointModel:
 
         self.fit_ = False
 
-    @torch.compile
+    @torch.compile(mode="reduce-overhead")
     def _log_hazard(self, t0, t1, x, psi, alpha, beta, log_lambda0, g, reset):
         base = log_lambda0(t1 - t0) if reset else log_lambda0(t1)
         mod = g(t1, x, psi)
 
         return base + torch.einsum("ijk,k->ij", mod, alpha) + x @ beta.unsqueeze(1)
 
-    @torch.compile
+    @torch.compile(mode="reduce-overhead")
     def _cum_hazard(self, t0, t1, x, psi, alpha, beta, log_lambda0, g, reset):
         t0, t1 = t0.view(-1, 1), t1.view(-1, 1)
         mid = 0.5 * (t0 + t1)
@@ -67,7 +67,7 @@ class JointModel:
 
         return half.flatten() * (vals * self.std_weights).sum(dim=1)
 
-    @torch.compile
+    @torch.compile(mode="reduce-overhead")
     def _hazard_ll(self, psi):
         ll = torch.zeros(self.n)
 
@@ -93,7 +93,7 @@ class JointModel:
             ll.scatter_add_(0, idx, alts_ll)
         return ll
 
-    @torch.compile
+    @torch.compile(mode="reduce-overhead")
     def _long_ll(self, psi):
         diff = self.y - self.h(self.t, self.x, psi)
         n_valid = (~torch.isnan(diff)).any(dim=2).sum(dim=1)
@@ -101,22 +101,19 @@ class JointModel:
         R_inv = torch.exp(-self.params["log_R"])
         log_det_R = self.params["log_R"].sum()
         quad_form = torch.einsum("ijk,k,ijk->i", diff, R_inv, diff)
-
         return -0.5 * (log_det_R * n_valid + quad_form)
 
-    @torch.compile
+    @torch.compile(mode="reduce-overhead")
     def _pr_ll(self, b):
         diff = b - self.params["mu"]
         Q_inv = torch.exp(-self.params["log_Q"])
         log_det_Q = self.params["log_Q"].sum()
         quad_form = torch.einsum("ij,j,ij->i", diff, Q_inv, diff)
-
         return -0.5 * (log_det_Q + quad_form)
 
-    @torch.compile
+    @torch.compile(mode="reduce-overhead")
     def _ll(self, b):
         psi = self.f(self.params["gamma"], b)
-
         return self._long_ll(psi) + self._hazard_ll(psi) + self._pr_ll(b)
 
     def _mh(self, curr_b, curr_ll):
@@ -131,7 +128,6 @@ class JointModel:
             (accept.to(torch.float32).mean() - self.accept_target)
             * self.accept_step_size
         )
-
         return curr_b, curr_ll
 
     def _mcmc(self, curr_b, curr_ll, burn_in, batch_size):
@@ -413,4 +409,3 @@ class JointModel:
             )
         del dummy_jm
         return T_pred
-
