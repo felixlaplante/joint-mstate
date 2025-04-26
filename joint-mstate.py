@@ -3,7 +3,7 @@ from torch.optim import Adam
 from tqdm import tqdm
 from collections import defaultdict
 
-
+ 
 class Fun:
     """A simple callable wrapper for a function with specified input and output dimensions."""
 
@@ -310,6 +310,9 @@ class JointModel:
         return t_right.flatten()
 
     def sample(self, T, C, x, psi, t_surv=None, max_iter=100):
+        x = torch.as_tensor(x, dtype=torch.float32)
+        psi = torch.as_tensor(psi, dtype=torch.float32)
+
         n = x.shape[0]
 
         last_alts = self._build_alts([trajectory[-1:] for trajectory in T], C)
