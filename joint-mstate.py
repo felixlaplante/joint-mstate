@@ -48,14 +48,14 @@ class JointModel:
 
         self.fit_ = False
 
-    @torch.compile(mode="reduce-overhead")
+    @torch.compile(dynamic=True, mode="reduce-overhead")
     def _log_hazard(self, t0, t1, x, psi, alpha, beta, log_lambda0, g, reset):
         base = log_lambda0(t1 - t0) if reset else log_lambda0(t1)
         mod = g(t1, x, psi)
 
         return base + torch.einsum("ijk,k->ij", mod, alpha) + x @ beta.unsqueeze(1)
 
-    @torch.compile(mode="reduce-overhead")
+    @torch.compile(dynamic=True, mode="reduce-overhead")
     def _cum_hazard(self, t0, t1, x, psi, alpha, beta, log_lambda0, g, reset):
         t0, t1 = t0.view(-1, 1), t1.view(-1, 1)
         mid = 0.5 * (t0 + t1)
@@ -67,7 +67,7 @@ class JointModel:
 
         return half.flatten() * (vals * self.std_weights).sum(dim=1)
 
-    @torch.compile(mode="reduce-overhead")
+    @torch.compile(dynamic=True, mode="reduce-overhead")
     def _hazard_ll(self, psi):
         ll = torch.zeros(self.n)
 
@@ -93,7 +93,7 @@ class JointModel:
             ll.scatter_add_(0, idx, alts_ll)
         return ll
 
-    @torch.compile(mode="reduce-overhead")
+    @torch.compile(dynamic=True, mode="reduce-overhead")
     def _long_ll(self, psi):
         diff = self.y - self.h(self.t, self.x, psi)
         n_valid = (~torch.isnan(diff)).any(dim=2).sum(dim=1)
@@ -103,7 +103,7 @@ class JointModel:
         quad_form = torch.einsum("ijk,k,ijk->i", diff, R_inv, diff)
         return -0.5 * (log_det_R * n_valid + quad_form)
 
-    @torch.compile(mode="reduce-overhead")
+    @torch.compile(dynamic=True, mode="reduce-overhead")
     def _pr_ll(self, b):
         diff = b - self.params["mu"]
         Q_inv = torch.exp(-self.params["log_Q"])
@@ -111,7 +111,7 @@ class JointModel:
         quad_form = torch.einsum("ij,j,ij->i", diff, Q_inv, diff)
         return -0.5 * (log_det_Q + quad_form)
 
-    @torch.compile(mode="reduce-overhead")
+    @torch.compile(dynamic=True, mode="reduce-overhead")
     def _ll(self, b):
         psi = self.f(self.params["gamma"], b)
         return self._long_ll(psi) + self._hazard_ll(psi) + self._pr_ll(b)
