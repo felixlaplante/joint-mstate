@@ -207,7 +207,7 @@ class JointModel:
         self._n_valid = self._valid.any(dim=2).sum(dim=1)
         self.y = torch.nan_to_num(self.y)
         self.T = T
-        self.C = C
+        self.C = torch.as_tensor(C, dtype=torch.float32)
         self.n, self.p = x.shape
 
         self.params = {}
@@ -234,8 +234,8 @@ class JointModel:
         curr_b = self.params["mu"].detach().repeat(self.n, 1)
         curr_ll = torch.full((self.n,), -torch.inf)
 
-        self.trans = self._build_trans(T)
-        self.alts = self._build_alts(T, C)
+        self.trans = self._build_trans(self.T)
+        self.alts = self._build_alts(self.T, self.C)
 
         for _ in tqdm(range(n_iter), "Fitting..."):
             ll, curr_b, curr_ll = self._mcmc(curr_b, curr_ll, burn_in, batch_size)
@@ -347,8 +347,8 @@ class JointModel:
             min_t, argmin_t = torch.min(t_cand, dim=1)
             valid = torch.nonzero(torch.isfinite(min_t)).flatten()
             for i in valid:
-                n1 = argmin_t[i]
-                t1 = min_t[i]
+                n1 = int(argmin_t[i])
+                t1 = min_t[i].item()
                 s1 = list(last_alts.keys())[n1][1]
                 T[i].append((t1, s1))
             last_alts = self._build_alts([trajectory[-1:] for trajectory in T], C)
@@ -385,11 +385,11 @@ class JointModel:
         dummy_jm._n_valid = dummy_jm._valid.any(dim=2).sum(dim=1)
         dummy_jm.y = torch.nan_to_num(dummy_jm.y)
         dummy_jm.T = T
-        dummy_jm.C = C
+        dummy_jm.C = torch.as_tensor(C, dtype=torch.float32)
         dummy_jm.n, dummy_jm.p = x.shape
 
-        dummy_jm.trans = self._build_trans(T)
-        dummy_jm.alts = self._build_alts(T, C)
+        dummy_jm.trans = self._build_trans(dummy_jm.T)
+        dummy_jm.alts = self._build_alts(dummy_jm.T, dummy_jm.C)
 
         curr_b = dummy_jm.params["mu"].repeat(dummy_jm.n, 1)
         curr_ll = torch.full((dummy_jm.n,), -torch.inf)
@@ -404,11 +404,11 @@ class JointModel:
             T_pred.append(
                 [
                     dummy_jm.sample(
-                        T,
+                        dummy_jm.T,
                         t_max,
-                        x,
+                        dummy_jm.x,
                         dummy_jm.f(dummy_jm.params["gamma"], curr_b),
-                        C,
+                        dummy_jm.C,
                         max_iter,
                     )
                     for _ in range(n_samples)
