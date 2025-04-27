@@ -359,7 +359,7 @@ class JointModel:
 
     @torch.compile
     def predict_surv(
-        self, t_max, x, t, y, T, C, n_iter, n_samples, burn_in, max_iter=100
+        self, C_max, x, t, y, T, C, n_iter, n_samples, burn_in, max_iter=100
     ):
         assert self.fit_
 
@@ -405,7 +405,7 @@ class JointModel:
                 [
                     dummy_jm.sample(
                         dummy_jm.T,
-                        t_max,
+                        C_max,
                         dummy_jm.x,
                         dummy_jm.f(dummy_jm.params["gamma"], curr_b),
                         dummy_jm.C,
