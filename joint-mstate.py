@@ -17,6 +17,8 @@ class Fun:
 
 
 torch._dynamo.config.capture_scalar_outputs = True
+
+
 class JointModel:
     """A joint model combining longitudinal and hazard components with MCMC and optimization routines."""
 
@@ -378,9 +380,10 @@ class JointModel:
 
         dummy_jm.x = torch.as_tensor(x, dtype=torch.float32)
         dummy_jm.t = torch.as_tensor(t, dtype=torch.float32)
+        dummy_jm.y = torch.as_tensor(y, dtype=torch.float32)
         dummy_jm._valid = ~torch.isnan(dummy_jm.y)
         dummy_jm._n_valid = dummy_jm._valid.any(dim=2).sum(dim=1)
-        dummy_jm.y = torch.nan_to_num(self.y)
+        dummy_jm.y = torch.nan_to_num(dummy_jm.y)
         dummy_jm.T = T
         dummy_jm.C = C
         dummy_jm.n, dummy_jm.p = x.shape
