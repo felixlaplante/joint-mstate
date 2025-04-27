@@ -3,7 +3,7 @@ from torch.optim import Adam
 from tqdm import tqdm
 from collections import defaultdict
 
- 
+
 class Fun:
     """A simple callable wrapper for a function with specified input and output dimensions."""
 
@@ -16,6 +16,7 @@ class Fun:
         return self.fun(*args)
 
 
+torch._dynamo.config.capture_scalar_outputs = True
 class JointModel:
     """A joint model combining longitudinal and hazard components with MCMC and optimization routines."""
 
@@ -91,13 +92,11 @@ class JointModel:
         return ll
 
     def _long_ll(self, psi):
-        diff = self.y - self.h(self.t, self.x, psi)
-        n_valid = (~torch.isnan(diff)).any(dim=2).sum(dim=1)
-        diff = torch.nan_to_num(diff)
+        diff = self.y - self.h(self.t, self.x, psi) * self._valid
         R_inv = torch.exp(-self.params["log_R"])
         log_det_R = self.params["log_R"].sum()
         quad_form = torch.einsum("ijk,k,ijk->i", diff, R_inv, diff)
-        return -0.5 * (log_det_R * n_valid + quad_form)
+        return -0.5 * (log_det_R * self._n_valid + quad_form)
 
     def _pr_ll(self, b):
         diff = b - self.params["mu"]
@@ -184,6 +183,7 @@ class JointModel:
             for k, v in buf.items()
         }
 
+    @torch.compile
     def fit(
         self,
         x,
@@ -201,6 +201,9 @@ class JointModel:
         self.x = torch.as_tensor(x, dtype=torch.float32)
         self.t = torch.as_tensor(t, dtype=torch.float32)
         self.y = torch.as_tensor(y, dtype=torch.float32)
+        self._valid = ~torch.isnan(self.y)
+        self._n_valid = self._valid.any(dim=2).sum(dim=1)
+        self.y = torch.nan_to_num(self.y)
         self.T = T
         self.C = C
         self.n, self.p = x.shape
@@ -225,7 +228,7 @@ class JointModel:
         ]
         optimizer = optimizer(params=params, lr=lr)
 
-        burn_in = int(torch.ceil(self.K).item())
+        burn_in = int(torch.ceil(self.K))
         curr_b = self.params["mu"].detach().repeat(self.n, 1)
         curr_ll = torch.full((self.n,), -torch.inf)
 
@@ -246,7 +249,7 @@ class JointModel:
                 sum(((p - pb) ** 2).sum() for pb, p in zip(params_before, params))
             ).item()
 
-            burn_in = int(torch.ceil(step_norm * self.K).item())
+            burn_in = int(torch.ceil(step_norm * self.K))
 
             if callback is not None:
                 callback()
@@ -303,6 +306,7 @@ class JointModel:
             t_right[~accept] = t_mid[~accept]
         return t_right.flatten()
 
+    @torch.compile
     def sample(self, T, C, x, psi, t_surv=None, max_iter=100):
         x = torch.as_tensor(x, dtype=torch.float32)
         psi = torch.as_tensor(psi, dtype=torch.float32)
@@ -341,8 +345,8 @@ class JointModel:
             min_t, argmin_t = torch.min(t_cand, dim=1)
             valid = torch.nonzero(torch.isfinite(min_t)).flatten()
             for i in valid:
-                n1 = argmin_t[i].item()
-                t1 = min_t[i].item()
+                n1 = argmin_t[i]
+                t1 = min_t[i]
                 s1 = list(last_alts.keys())[n1][1]
                 T[i].append((t1, s1))
             last_alts = self._build_alts([trajectory[-1:] for trajectory in T], C)
@@ -351,6 +355,7 @@ class JointModel:
             for i, trajectory in enumerate(T)
         ]
 
+    @torch.compile
     def predict_surv(
         self, t_max, x, t, y, T, C, n_iter, n_samples, burn_in, max_iter=100
     ):
@@ -373,7 +378,9 @@ class JointModel:
 
         dummy_jm.x = torch.as_tensor(x, dtype=torch.float32)
         dummy_jm.t = torch.as_tensor(t, dtype=torch.float32)
-        dummy_jm.y = torch.as_tensor(y, dtype=torch.float32)
+        dummy_jm._valid = ~torch.isnan(dummy_jm.y)
+        dummy_jm._n_valid = dummy_jm._valid.any(dim=2).sum(dim=1)
+        dummy_jm.y = torch.nan_to_num(self.y)
         dummy_jm.T = T
         dummy_jm.C = C
         dummy_jm.n, dummy_jm.p = x.shape
