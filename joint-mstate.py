@@ -394,6 +394,11 @@ class JointModel:
         curr_b = dummy_jm.params["mu"].repeat(dummy_jm.n, 1)
         curr_ll = torch.full((dummy_jm.n,), -torch.inf)
 
+        x_rep = dummy_jm.x.repeat(n_samples, 1)
+        T_rep = dummy_jm.T * n_samples
+        C_rep = dummy_jm.C.repeat(n_samples)
+        C_max_rep = C_max.repeat(n_samples)
+
         T_pred = []
         for _ in tqdm(range(n_iter), "Predicting..."):
             for _ in range(burn_in):
@@ -401,18 +406,21 @@ class JointModel:
                     curr_b,
                     curr_ll,
                 )
-            T_pred.append(
-                [
-                    dummy_jm.sample(
-                        dummy_jm.T,
-                        C_max,
-                        dummy_jm.x,
-                        dummy_jm.f(dummy_jm.params["gamma"], curr_b),
-                        dummy_jm.C,
-                        max_iter,
-                    )
-                    for _ in range(n_samples)
-                ]
+
+            psi_rep = dummy_jm.f(dummy_jm.params["gamma"], curr_b).repeat(n_samples, 1)
+            res = dummy_jm.sample(
+                T_rep,
+                C_max_rep,
+                x_rep,
+                psi_rep,
+                C_rep,
+                max_iter,
             )
+            chunks = [
+                res[i * dummy_jm.n : (i + 1) * dummy_jm.n] for i in range(n_samples)
+            ]
+
+            T_pred.append(chunks)
+
         del dummy_jm
         return T_pred
