@@ -1,9 +1,8 @@
 import torch
-from torch.optim import Adam
 from tqdm import tqdm
 from collections import defaultdict
 
-
+  
 class Fun:
     """A simple callable wrapper for a function with specified input and output dimensions."""
 
@@ -51,19 +50,19 @@ class JointModel:
 
         self.fit_ = False
 
-    def _log_hazard(self, t0, t1, x, psi, alpha, beta, log_lambda0, g, reset):
-        base = log_lambda0(t1 - t0) if reset else log_lambda0(t1)
+    def _log_hazard(self, t0, t1, x, psi, alpha, beta, log_lambda0, g):
+        base = log_lambda0(t1, t0)
         mod = g(t1, x, psi)
 
         return base + torch.einsum("ijk,k->ij", mod, alpha) + x @ beta.unsqueeze(1)
 
-    def _cum_hazard(self, t0, t1, x, psi, alpha, beta, log_lambda0, g, reset):
+    def _cum_hazard(self, t0, t1, x, psi, alpha, beta, log_lambda0, g):
         t0, t1 = t0.view(-1, 1), t1.view(-1, 1)
         mid = 0.5 * (t0 + t1)
         half = 0.5 * (t1 - t0)
         ts = mid + half * self.std_nodes
         vals = torch.exp(
-            self._log_hazard(t0, ts, x, psi, alpha, beta, log_lambda0, g, reset)
+            self._log_hazard(t0, ts, x, psi, alpha, beta, log_lambda0, g)
         )
 
         return half.flatten() * (vals * self.std_weights).sum(dim=1)
@@ -267,7 +266,6 @@ class JointModel:
         beta,
         log_lambda0,
         g,
-        reset,
         t_surv,
     ):
         n = x.shape[0]
@@ -286,7 +284,6 @@ class JointModel:
                 beta,
                 log_lambda0,
                 g,
-                reset,
             )
             target += res
         for _ in range(self.n_bissect):
@@ -300,7 +297,6 @@ class JointModel:
                 beta,
                 log_lambda0,
                 g,
-                reset,
             )
 
             accept = res < target
