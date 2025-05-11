@@ -393,6 +393,7 @@ class JointModel:
         x_rep = dummy_jm.x.repeat(n_samples, 1)
         T_rep = dummy_jm.T * n_samples
         C_rep = dummy_jm.C.repeat(n_samples)
+        C_max = torch.as_tensor(C_max, dtype=torch.float32)
         C_max_rep = C_max.repeat(n_samples)
 
         T_pred = []
