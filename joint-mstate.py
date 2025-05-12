@@ -63,7 +63,7 @@ class JointModel:
         return half.flatten() * (vals * self.std_weights).sum(dim=1)
 
     def _hazard_ll(self, psi):
-        ll = torch.zeros(self.n)
+        ll = torch.zeros(self.n, dtype=torch.float32)
 
         for d, info in self.trans.items():
             alpha, beta = self.params["alpha"][d], self.params["beta"][d]
