@@ -204,16 +204,27 @@ class JointModel:
         self.n, self.p = x.shape
 
         self.params = {}
-        self.params["gamma"] = torch.zeros(self.f.input_dim[0], requires_grad=True)
-        self.params["mu"] = torch.zeros(self.f.input_dim[1], requires_grad=True)
-        self.params["log_Q"] = torch.zeros(self.f.input_dim[1], requires_grad=True)
-        self.params["log_R"] = torch.zeros(self.h.output_dim, requires_grad=True)
+        self.params["gamma"] = torch.zeros(
+            self.f.input_dim[0], dtype=torch.float32, requires_grad=True
+        )
+        self.params["mu"] = torch.zeros(
+            self.f.input_dim[1], dtype=torch.float32, requires_grad=True
+        )
+        self.params["log_Q"] = torch.zeros(
+            self.f.input_dim[1], dtype=torch.float32, requires_grad=True
+        )
+        self.params["log_R"] = torch.zeros(
+            self.h.output_dim, dtype=torch.float32, requires_grad=True
+        )
         self.params["alpha"] = {
-            key: torch.zeros(self.surv[key]["g"].output_dim, requires_grad=True)
+            key: torch.zeros(
+                self.surv[key]["g"].output_dim, dtype=torch.float32, requires_grad=True
+            )
             for key in self.surv.keys()
         }
         self.params["beta"] = {
-            key: torch.zeros(self.p, requires_grad=True) for key in self.surv.keys()
+            key: torch.zeros(self.p, dtype=torch.float32, requires_grad=True)
+            for key in self.surv.keys()
         }
 
         params = [v for v in self.params.values() if not isinstance(v, dict)]
