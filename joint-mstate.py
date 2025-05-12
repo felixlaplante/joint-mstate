@@ -2,7 +2,7 @@ import torch
 from tqdm import tqdm
 from collections import defaultdict
 
-  
+
 class Fun:
     """A simple callable wrapper for a function with specified input and output dimensions."""
 
@@ -13,9 +13,6 @@ class Fun:
 
     def __call__(self, *args):
         return self.fun(*args)
-
-
-torch._dynamo.config.capture_scalar_outputs = True
 
 
 class JointModel:
@@ -30,7 +27,7 @@ class JointModel:
         step_size=1.0,
         accept_step_size=0.1,
         accept_target=0.234,
-        n_quad=32,
+        n_quad=16,
         n_bissect=16,
     ):
         self.h = h
@@ -61,9 +58,7 @@ class JointModel:
         mid = 0.5 * (t0 + t1)
         half = 0.5 * (t1 - t0)
         ts = mid + half * self.std_nodes
-        vals = torch.exp(
-            self._log_hazard(t0, ts, x, psi, alpha, beta, log_lambda0, g)
-        )
+        vals = torch.exp(self._log_hazard(t0, ts, x, psi, alpha, beta, log_lambda0, g))
 
         return half.flatten() * (vals * self.std_weights).sum(dim=1)
 
@@ -184,7 +179,6 @@ class JointModel:
             for k, v in buf.items()
         }
 
-    @torch.compile
     def fit(
         self,
         x,
@@ -304,7 +298,6 @@ class JointModel:
             t_right[~accept] = t_mid[~accept]
         return t_right.flatten()
 
-    @torch.compile
     def sample(self, T, C, x, psi, t_surv=None, max_iter=100):
         x = torch.as_tensor(x, dtype=torch.float32)
         psi = torch.as_tensor(psi, dtype=torch.float32)
@@ -353,9 +346,18 @@ class JointModel:
             for i, trajectory in enumerate(T)
         ]
 
-    @torch.compile
     def predict_surv(
-        self, C_max, x, t, y, T, C, n_iter, n_samples, burn_in, max_iter=100
+        self,
+        C_max,
+        x,
+        t,
+        y,
+        T,
+        C,
+        n_iter_b,
+        n_iter_T,
+        burn_in,
+        max_iter=100,
     ):
         assert self.fit_
 
@@ -390,21 +392,22 @@ class JointModel:
         curr_b = dummy_jm.params["mu"].repeat(dummy_jm.n, 1)
         curr_ll = torch.full((dummy_jm.n,), -torch.inf)
 
-        x_rep = dummy_jm.x.repeat(n_samples, 1)
-        T_rep = dummy_jm.T * n_samples
-        C_rep = dummy_jm.C.repeat(n_samples)
+        x_rep = dummy_jm.x.repeat(n_iter_T, 1)
+        T_rep = dummy_jm.T * n_iter_T
+        C_rep = dummy_jm.C.repeat(n_iter_T)
         C_max = torch.as_tensor(C_max, dtype=torch.float32)
-        C_max_rep = C_max.repeat(n_samples)
+        C_max_rep = C_max.repeat(n_iter_T)
 
         T_pred = []
-        for _ in tqdm(range(n_iter), "Predicting..."):
+        for _ in tqdm(range(n_iter_b), "Predicting..."):
             for _ in range(burn_in):
                 curr_b, curr_ll = dummy_jm._mh(
                     curr_b,
                     curr_ll,
                 )
 
-            psi_rep = dummy_jm.f(dummy_jm.params["gamma"], curr_b).repeat(n_samples, 1)
+            psi_rep = dummy_jm.f(dummy_jm.params["gamma"], curr_b).repeat(n_iter_T, 1)
+
             res = dummy_jm.sample(
                 T_rep,
                 C_max_rep,
@@ -414,7 +417,7 @@ class JointModel:
                 max_iter,
             )
             chunks = [
-                res[i * dummy_jm.n : (i + 1) * dummy_jm.n] for i in range(n_samples)
+                res[i * dummy_jm.n : (i + 1) * dummy_jm.n] for i in range(n_iter_T)
             ]
 
             T_pred.append(chunks)
