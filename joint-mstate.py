@@ -14,7 +14,6 @@ class Fun:
     def __call__(self, *args):
         return self.fun(*args)
 
-
 class JointModel:
     """A joint model combining longitudinal and hazard components with MCMC and optimization routines."""
 
@@ -58,33 +57,37 @@ class JointModel:
         mid = 0.5 * (t0 + t1)
         half = 0.5 * (t1 - t0)
         ts = mid + half * self.std_nodes
-        vals = torch.exp(self._log_hazard(t0, ts, x, psi, alpha, beta, log_lambda0, g))
 
+        vals = torch.exp(self._log_hazard(t0, ts, x, psi, alpha, beta, log_lambda0, g))
         return half.flatten() * (vals * self.std_weights).sum(dim=1)
+
+    def _log_hazard_cum_hazard(self, t0, t1, x, psi, alpha, beta, log_lambda0, g):
+        t0, t1 = t0.view(-1, 1), t1.view(-1, 1)
+        mid = 0.5 * (t0 + t1)
+        half = 0.5 * (t1 - t0)
+        ts = torch.cat([t1, mid + half * self.std_nodes], axis=1)
+
+        temp = self._log_hazard(t0, ts, x, psi, alpha, beta, log_lambda0, g)
+        log_hazard, vals = temp[:, :1], torch.exp(temp[:, 1:])
+
+        return log_hazard.flatten(), half.flatten() * (vals * self.std_weights).sum(
+            dim=1
+        )
 
     def _hazard_ll(self, psi):
         ll = torch.zeros(self.n, dtype=torch.float32)
 
-        for d, info in self.trans.items():
+        for d, info in self._buckets.items():
             alpha, beta = self.params["alpha"][d], self.params["beta"][d]
-            idx, t0, t1 = info["idx"], info["t0"], info["t1"]
-            trans_ll = self._log_hazard(
-                t0,
-                t1,
-                self.x[idx],
-                psi[idx],
-                alpha,
-                beta,
-                **self.surv[d],
-            ).flatten()
-            ll.scatter_add_(0, idx, trans_ll)
-        for d, info in self.alts.items():
-            alpha, beta = self.params["alpha"][d], self.params["beta"][d]
-            idx, t0, t1 = info["idx"], info["t0"], info["t1"]
-            alts_ll = -self._cum_hazard(
+            idx, t0, t1, obs = info["idx"], info["t0"], info["t1"], info["obs"]
+
+            obs_ll, alts_ll = self._log_hazard_cum_hazard(
                 t0, t1, self.x[idx], psi[idx], alpha, beta, **self.surv[d]
             )
-            ll.scatter_add_(0, idx, alts_ll)
+
+            vals = obs * obs_ll - alts_ll
+            ll.scatter_add_(0, idx, vals)
+
         return ll
 
     def _long_ll(self, psi):
@@ -135,46 +138,29 @@ class JointModel:
             ll += curr_ll.sum()
         return ll / batch_size, curr_b, curr_ll
 
-    def _build_trans(self, T):
-        surv = set(self.surv)
-        buf = defaultdict(lambda: [[], [], []])
-        for i, tr in enumerate(T):
-            for (t0, s0), (t1, s1) in zip(tr, tr[1:]):
-                key = (s0, s1)
-                if key in surv:
-                    buf[key][0].append(i)
-                    buf[key][1].append(t0)
-                    buf[key][2].append(t1)
-        return {
-            k: {
-                "idx": torch.tensor(v[0], dtype=torch.int64),
-                "t0": torch.tensor(v[1], dtype=torch.float32).view(-1, 1),
-                "t1": torch.tensor(v[2], dtype=torch.float32).view(-1, 1),
-            }
-            for k, v in buf.items()
-        }
-
-    def _build_alts(self, T, C):
+    def _build_buckets(self, T, C):
         surv = set(self.surv)
         alt_map = defaultdict(list)
         for a, b in self.surv:
             alt_map[a].append(b)
-        buf = defaultdict(lambda: [[], [], []])
+        buf = defaultdict(lambda: [[], [], [], []])
         for i, tr in enumerate(T):
-            for (t0, s0), (t1, _) in zip(tr, tr[1:] + [(float(C[i]), -1)]):
+            for (t0, s0), (t1, s1) in zip(tr, tr[1:] + [(float(C[i]), torch.nan)]):
                 if t0 >= t1:
                     continue
-                for s1 in alt_map.get(s0, ()):
-                    key = (s0, s1)
+                for virt_s1 in alt_map.get(s0, ()):
+                    key = (s0, virt_s1)
                     if key in surv:
                         buf[key][0].append(i)
                         buf[key][1].append(t0)
                         buf[key][2].append(t1)
+                        buf[key][3].append(virt_s1 == s1)
         return {
             k: {
                 "idx": torch.tensor(v[0], dtype=torch.int64),
                 "t0": torch.tensor(v[1], dtype=torch.float32).view(-1, 1),
                 "t1": torch.tensor(v[2], dtype=torch.float32).view(-1, 1),
+                "obs": torch.tensor(v[3], dtype=bool),
             }
             for k, v in buf.items()
         }
@@ -204,27 +190,16 @@ class JointModel:
         self.n, self.p = x.shape
 
         self.params = {}
-        self.params["gamma"] = torch.zeros(
-            self.f.input_dim[0], dtype=torch.float32, requires_grad=True
-        )
-        self.params["mu"] = torch.zeros(
-            self.f.input_dim[1], dtype=torch.float32, requires_grad=True
-        )
-        self.params["log_Q"] = torch.zeros(
-            self.f.input_dim[1], dtype=torch.float32, requires_grad=True
-        )
-        self.params["log_R"] = torch.zeros(
-            self.h.output_dim, dtype=torch.float32, requires_grad=True
-        )
+        self.params["gamma"] = torch.zeros(self.f.input_dim[0], requires_grad=True)
+        self.params["mu"] = torch.zeros(self.f.input_dim[1], requires_grad=True)
+        self.params["log_Q"] = torch.zeros(self.f.input_dim[1], requires_grad=True)
+        self.params["log_R"] = torch.zeros(self.h.output_dim, requires_grad=True)
         self.params["alpha"] = {
-            key: torch.zeros(
-                self.surv[key]["g"].output_dim, dtype=torch.float32, requires_grad=True
-            )
+            key: torch.zeros(self.surv[key]["g"].output_dim, requires_grad=True)
             for key in self.surv.keys()
         }
         self.params["beta"] = {
-            key: torch.zeros(self.p, dtype=torch.float32, requires_grad=True)
-            for key in self.surv.keys()
+            key: torch.zeros(self.p, requires_grad=True) for key in self.surv.keys()
         }
 
         params = [v for v in self.params.values() if not isinstance(v, dict)]
@@ -238,8 +213,7 @@ class JointModel:
         curr_b = self.params["mu"].detach().repeat(self.n, 1)
         curr_ll = torch.full((self.n,), -torch.inf, dtype=torch.float32)
 
-        self.trans = self._build_trans(self.T)
-        self.alts = self._build_alts(self.T, self.C)
+        self._buckets = self._build_buckets(self.T, self.C)
 
         for _ in tqdm(range(n_iter), "Fitting..."):
             ll, curr_b, curr_ll = self._mcmc(curr_b, curr_ll, burn_in, batch_size)
@@ -315,7 +289,7 @@ class JointModel:
 
         n = x.shape[0]
 
-        last_alts = self._build_alts([trajectory[-1:] for trajectory in T], C)
+        last_alts = self._build_buckets([trajectory[-1:] for trajectory in T], C)
         T = list(map(list, T))
         for i in range(max_iter):
             if last_alts == {}:
@@ -351,7 +325,7 @@ class JointModel:
                 t1 = min_t[i].item()
                 s1 = list(last_alts.keys())[n1][1]
                 T[i].append((t1, s1))
-            last_alts = self._build_alts([trajectory[-1:] for trajectory in T], C)
+            last_alts = self._build_buckets([trajectory[-1:] for trajectory in T], C)
         return [
             trajectory[:-1] if trajectory[-1][0] > C[i] else trajectory
             for i, trajectory in enumerate(T)
@@ -397,11 +371,10 @@ class JointModel:
         dummy_jm.C = torch.as_tensor(C, dtype=torch.float32)
         dummy_jm.n, dummy_jm.p = x.shape
 
-        dummy_jm.trans = self._build_trans(dummy_jm.T)
-        dummy_jm.alts = self._build_alts(dummy_jm.T, dummy_jm.C)
+        dummy_jm._buckets = self._build_buckets(dummy_jm.T, dummy_jm.C)
 
         curr_b = dummy_jm.params["mu"].repeat(dummy_jm.n, 1)
-        curr_ll = torch.full((dummy_jm.n,), -torch.inf)
+        curr_ll = torch.full((dummy_jm.n,), -torch.inf, dtype=torch.float32)
 
         x_rep = dummy_jm.x.repeat(n_iter_T, 1)
         T_rep = dummy_jm.T * n_iter_T
