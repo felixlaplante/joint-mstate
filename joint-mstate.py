@@ -236,7 +236,7 @@ class JointModel:
 
         burn_in = int(torch.ceil(self.K))
         curr_b = self.params["mu"].detach().repeat(self.n, 1)
-        curr_ll = torch.full((self.n,), -torch.inf)
+        curr_ll = torch.full((self.n,), -torch.inf, dtype=torch.float32)
 
         self.trans = self._build_trans(self.T)
         self.alts = self._build_alts(self.T, self.C)
