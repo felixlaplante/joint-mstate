@@ -61,7 +61,7 @@ class JointModel:
         vals = torch.exp(self._log_hazard(t0, ts, x, psi, alpha, beta, log_lambda0, g))
         return half.flatten() * (vals * self.std_weights).sum(dim=1)
 
-    def _log_hazard_cum_hazard(self, t0, t1, x, psi, alpha, beta, log_lambda0, g):
+    def _log_and_cum_hazard(self, t0, t1, x, psi, alpha, beta, log_lambda0, g):
         t0, t1 = t0.view(-1, 1), t1.view(-1, 1)
         mid = 0.5 * (t0 + t1)
         half = 0.5 * (t1 - t0)
@@ -81,7 +81,7 @@ class JointModel:
             alpha, beta = self.params["alpha"][d], self.params["beta"][d]
             idx, t0, t1, obs = info["idx"], info["t0"], info["t1"], info["obs"]
 
-            obs_ll, alts_ll = self._log_hazard_cum_hazard(
+            obs_ll, alts_ll = self._log_and_cum_hazard(
                 t0, t1, self.x[idx], psi[idx], alpha, beta, **self.surv[d]
             )
 
