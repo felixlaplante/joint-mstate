@@ -86,7 +86,7 @@ class JointModel:
             )
 
             vals = obs * obs_ll - alts_ll
-            ll.scatter_add_(0, idx, vals)
+            ll[idx] += vals
 
         return ll
 
@@ -300,6 +300,7 @@ class JointModel:
                     len(last_alts),
                 ),
                 torch.inf,
+                dtype=torch.float32,
             )
 
             for j, (d, info) in enumerate(last_alts.items()):
@@ -317,7 +318,7 @@ class JointModel:
                     t_surv=t_surv[idx] if not i and t_surv is not None else None,
                 )
 
-                t_cand[:, j].scatter_(0, idx, t_sample)
+                t_cand[idx, j] = t_sample
             min_t, argmin_t = torch.min(t_cand, dim=1)
             valid = torch.nonzero(torch.isfinite(min_t)).flatten()
             for i in valid:
