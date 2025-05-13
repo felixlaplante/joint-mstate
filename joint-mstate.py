@@ -86,7 +86,7 @@ class JointModel:
             )
 
             vals = obs * obs_ll - alts_ll
-            ll[idx] += vals
+            ll.scatter_add_(0, idx, vals)
 
         return ll
 
