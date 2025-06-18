@@ -179,7 +179,7 @@ class JointModel:
         n_iter,
         batch_size,
         callback=None,
-        n_iter_fim=500,
+        n_iter_fim=1000,
     ):
 
         self.x = torch.as_tensor(x, dtype=torch.float32)
