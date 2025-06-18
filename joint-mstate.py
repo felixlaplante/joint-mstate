@@ -264,6 +264,36 @@ class JointModel:
 
         self.fit_ = True
 
+    def get_pval(self):
+        assert self.fit_
+
+        params = [v for v in self.params.values() if not isinstance(v, dict)]
+        params += [
+            *self.params["alpha"].values(),
+            *self.params["beta"].values(),
+        ]
+        params = torch.concat([p.detach().flatten() for p in params])
+
+        se = torch.sqrt(torch.linalg.pinv(self.fim).diag())
+        z = params / se
+        pvec = 2 * (1 - torch.distributions.Normal(0, 1).cdf(z.abs()))
+
+        pval = {}
+        i = 0
+        for key, val in self.params.items():
+            if isinstance(val, dict):
+                pval[key] = {}
+                for subkey, tensor in val.items():
+                    n = tensor.numel()
+                    pval[key][subkey] = pvec[i : i + n].view_as(tensor)
+                    i += n
+            else:
+                n = val.numel()
+                pval[key] = pvec[i : i + n].view_as(val)
+                i += n
+
+        return pval
+
     def _sample(
         self,
         t_left,
