@@ -179,6 +179,7 @@ class JointModel:
         n_iter,
         batch_size,
         callback=None,
+        n_iter_fim=500,
     ):
 
         self.x = torch.as_tensor(x, dtype=torch.float32)
@@ -246,6 +247,21 @@ class JointModel:
 
             if callback is not None:
                 callback()
+
+        d = sum(p.numel() for p in params)
+        self.fim = torch.zeros(d, d)
+
+        for _ in tqdm(range(n_iter_fim), desc="Getting FIM..."):
+            ll, curr_b, curr_ll = self._mcmc(curr_b, curr_ll, 1, 1)
+
+            for p in params:
+                if p.grad is not None:
+                    p.grad.zero_()
+
+            ll.backward()
+            grad = torch.cat([p.grad.view(-1) for p in params])
+            self.fim += torch.outer(grad, grad) / n_iter_fim
+
         self.fit_ = True
 
     def _sample(
