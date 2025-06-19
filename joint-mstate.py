@@ -34,6 +34,7 @@ class JointModel:
         self.h = h
         self.f = f
         self.surv = surv
+        self.params = {}
 
         self.K = torch.tensor(K, dtype=torch.float32)
         self.step_size = torch.tensor(step_size, dtype=torch.float32)
@@ -192,7 +193,6 @@ class JointModel:
         self.C = torch.as_tensor(C, dtype=torch.float32)
         self.n, self.p = x.shape
 
-        self.params = {}
         self.params["gamma"] = torch.zeros(
             self.f.input_dim[0], dtype=torch.float32, requires_grad=True
         )
