@@ -101,10 +101,9 @@ class JointModel:
         return -0.5 * (log_det_R * self._n_valid + quad_form)
 
     def _pr_ll(self, b):
-        diff = b - self.params["mu"]
         Q_inv = torch.exp(-self.params["log_Q"])
         log_det_Q = self.params["log_Q"].sum()
-        quad_form = torch.einsum("ij,j,ij->i", diff, Q_inv, diff)
+        quad_form = torch.einsum("ij,j,ij->i", b, Q_inv, b)
         return -0.5 * (log_det_Q + quad_form)
 
     def _ll(self, b):
@@ -196,9 +195,6 @@ class JointModel:
         self.params["gamma"] = torch.zeros(
             self.f.input_dim[0], dtype=torch.float32, requires_grad=True
         )
-        self.params["mu"] = torch.zeros(
-            self.f.input_dim[1], dtype=torch.float32, requires_grad=True
-        )
         self.params["log_Q"] = torch.zeros(
             self.f.input_dim[1], dtype=torch.float32, requires_grad=True
         )
@@ -224,7 +220,7 @@ class JointModel:
         optimizer = optimizer(params=params, lr=lr)
 
         burn_in = int(torch.ceil(self.K))
-        curr_b = self.params["mu"].detach().repeat(self.n, 1)
+        curr_b = torch.zeros((self.n, self.f.input_dim[1]), dtype=torch.float32)
         curr_ll = torch.full((self.n,), -torch.inf, dtype=torch.float32)
 
         self._buckets = self._build_buckets(self.T, self.C)
@@ -433,7 +429,7 @@ class JointModel:
 
         dummy_jm._buckets = self._build_buckets(dummy_jm.T, dummy_jm.C)
 
-        curr_b = dummy_jm.params["mu"].repeat(dummy_jm.n, 1)
+        curr_b = torch.zeros((self.n, self.f.input_dim[1]), dtype=torch.float32)
         curr_ll = torch.full((dummy_jm.n,), -torch.inf, dtype=torch.float32)
 
         x_rep = dummy_jm.x.repeat(n_iter_T, 1)
