@@ -429,7 +429,7 @@ class JointModel:
 
         dummy_jm._buckets = self._build_buckets(dummy_jm.T, dummy_jm.C)
 
-        curr_b = torch.zeros((self.n, self.f.input_dim[1]), dtype=torch.float32)
+        curr_b = torch.zeros((dummy_jm.n, dummy_jm.f.input_dim[1]), dtype=torch.float32)
         curr_ll = torch.full((dummy_jm.n,), -torch.inf, dtype=torch.float32)
 
         x_rep = dummy_jm.x.repeat(n_iter_T, 1)
