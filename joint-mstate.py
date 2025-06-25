@@ -190,7 +190,7 @@ class JointModel:
         self.y = torch.nan_to_num(self.y)
         self.T = T
         self.C = torch.as_tensor(C, dtype=torch.float32)
-        self.n, self.p = x.shape
+        self.n, self.p = self.x.shape
 
         self.params["gamma"] = torch.zeros(
             self.f.input_dim[0], dtype=torch.float32, requires_grad=True
@@ -425,7 +425,7 @@ class JointModel:
         dummy_jm.y = torch.nan_to_num(dummy_jm.y)
         dummy_jm.T = T
         dummy_jm.C = torch.as_tensor(C, dtype=torch.float32)
-        dummy_jm.n, dummy_jm.p = x.shape
+        dummy_jm.n, dummy_jm.p = dummy_jm.x.shape
 
         dummy_jm._buckets = self._build_buckets(dummy_jm.T, dummy_jm.C)
 
