@@ -4,6 +4,42 @@ from tqdm import tqdm
 from collections import defaultdict
 
 
+class _MH:
+    """A simple Metropolis-Hastings class."""
+
+    def __init__(
+        self,
+        log_prob_fn,
+        curr_z,
+        curr_log_prob,
+        step_size,
+        accept_step_size,
+        accept_target,
+    ):
+        self.log_prob_fn = log_prob_fn
+        self.step_size = step_size
+        self.accept_step_size = accept_step_size
+        self.accept_target = accept_target
+        self.curr_z = curr_z
+        self.curr_log_prob = curr_log_prob
+
+    def __call__(self):
+        self.curr_z = self.curr_z.detach()
+        self.curr_log_prob = self.curr_log_prob.detach()
+        prop_z = self.curr_z + torch.randn_like(self.curr_z) * self.step_size
+        prop_log_prob = self.log_prob_fn(prop_z)
+        log_prob_diff = prop_log_prob - self.curr_log_prob
+        target = torch.log(torch.clip(torch.rand_like(log_prob_diff), 1e-8))
+        accept = target < log_prob_diff
+        self.curr_z[accept] = prop_z[accept]
+        self.curr_log_prob[accept] = prop_log_prob[accept]
+        self.step_size *= torch.exp(
+            (accept.to(torch.float32).mean() - self.accept_target)
+            * self.accept_step_size
+        )
+        return self.curr_z, self.curr_log_prob
+
+
 class Fun:
     """A simple callable wrapper for a function with specified input and output dimensions."""
 
@@ -24,10 +60,6 @@ class JointModel:
         h,
         f,
         surv,
-        K=10.0,
-        step_size=1.0,
-        accept_step_size=0.1,
-        accept_target=0.234,
         n_quad=16,
         n_bissect=16,
     ):
@@ -35,11 +67,6 @@ class JointModel:
         self.f = f
         self.surv = surv
         self.params = {}
-
-        self.K = torch.tensor(K, dtype=torch.float32)
-        self.step_size = torch.tensor(step_size, dtype=torch.float32)
-        self.accept_step_size = torch.tensor(accept_step_size, dtype=torch.float32)
-        self.accept_target = torch.tensor(accept_target, dtype=torch.float32)
 
         nodes, weights = np.polynomial.legendre.leggauss(n_quad)
         self.std_nodes = torch.tensor(nodes, dtype=torch.float32)
@@ -52,7 +79,7 @@ class JointModel:
     def _cholesky(self, flat, n):
         L = torch.zeros(n, n, dtype=flat.dtype)
         iu = torch.tril_indices(n, n)
-        L[iu[0], iu[1]] = flat 
+        L[iu[0], iu[1]] = flat
         return L
 
     def _log_hazard(self, t0, t1, x, psi, alpha, beta, log_lambda0, g):
@@ -103,7 +130,9 @@ class JointModel:
         diff = self.y - self.h(self.t, self.x, psi) * self._valid
         R_inv = self._cholesky(self.params["R_inv"], self.h.output_dim)
         log_det_R = -torch.diag(R_inv).sum() * 2
-        R_inv.view(-1)[::self.h.output_dim + 1] = torch.exp(R_inv.view(-1)[::self.h.output_dim + 1])
+        R_inv.view(-1)[:: self.h.output_dim + 1] = torch.exp(
+            R_inv.view(-1)[:: self.h.output_dim + 1]
+        )
         R_inv = R_inv @ R_inv.T
         quad_form = torch.einsum("ijk,kl,ijl->i", diff, R_inv, diff)
         return -0.5 * (log_det_R * self._n_valid + quad_form)
@@ -111,7 +140,9 @@ class JointModel:
     def _pr_ll(self, b):
         Q_inv = self._cholesky(self.params["Q_inv"], self.f.input_dim[1])
         log_det_Q = -torch.diag(Q_inv).sum() * 2
-        Q_inv.view(-1)[::self.f.input_dim[1] + 1] = torch.exp(Q_inv.view(-1)[::self.f.input_dim[1] + 1])
+        Q_inv.view(-1)[:: self.f.input_dim[1] + 1] = torch.exp(
+            Q_inv.view(-1)[:: self.f.input_dim[1] + 1]
+        )
         Q_inv = Q_inv @ Q_inv.T
         quad_form = torch.einsum("ik,kl,il->i", b, Q_inv, b)
         return -0.5 * (log_det_Q + quad_form)
@@ -120,33 +151,13 @@ class JointModel:
         psi = self.f(self.params["gamma"], b)
         return self._long_ll(psi) + self._hazard_ll(psi) + self._pr_ll(b)
 
-    def _mh(self, curr_b, curr_ll):
-        prop_b = curr_b + torch.randn_like(curr_b) * self.step_size
-        prop_logLik = self._ll(prop_b)
-        logLik_diff = prop_logLik - curr_ll
-        target = torch.log(torch.clip(torch.rand(self.n), 1e-8))
-        accept = target < logLik_diff
-        curr_b[accept] = prop_b[accept]
-        curr_ll[accept] = prop_logLik[accept]
-        self.step_size *= torch.exp(
-            (accept.to(torch.float32).mean() - self.accept_target)
-            * self.accept_step_size
-        )
-        return curr_b, curr_ll
-
-    def _mcmc(self, curr_b, curr_ll, burn_in, batch_size):
+    def _mcmc(self, mh, warmup, batch_size):
         with torch.no_grad():
-            for _ in range(burn_in):
-                curr_b, curr_ll = self._mh(
-                    curr_b.detach(),
-                    curr_ll.detach(),
-                )
+            for _ in range(warmup):
+                mh()
         ll = 0
         for _ in range(batch_size):
-            curr_b, curr_ll = self._mh(
-                curr_b.detach(),
-                curr_ll.detach(),
-            )
+            curr_b, curr_ll = mh()
             ll += curr_ll.sum()
         return ll / batch_size, curr_b, curr_ll
 
@@ -185,11 +196,15 @@ class JointModel:
         T,
         C,
         optimizer,
-        lr,
+        optimizer_params,
         n_iter,
         batch_size,
         callback=None,
         n_iter_fim=1000,
+        K=10.0,
+        step_size=1.0,
+        accept_step_size=0.1,
+        accept_target=0.234,
     ):
 
         self.x = torch.as_tensor(x, dtype=torch.float32)
@@ -206,10 +221,14 @@ class JointModel:
             self.f.input_dim[0], dtype=torch.float32, requires_grad=True
         )
         self.params["Q_inv"] = torch.zeros(
-            self.f.input_dim[1] * (self.f.input_dim[1] + 1) // 2, dtype=torch.float32, requires_grad=True
+            self.f.input_dim[1] * (self.f.input_dim[1] + 1) // 2,
+            dtype=torch.float32,
+            requires_grad=True,
         )
         self.params["R_inv"] = torch.zeros(
-            self.h.output_dim * (self.h.output_dim + 1) // 2, dtype=torch.float32, requires_grad=True
+            self.h.output_dim * (self.h.output_dim + 1) // 2,
+            dtype=torch.float32,
+            requires_grad=True,
         )
         self.params["alpha"] = {
             key: torch.zeros(
@@ -227,16 +246,17 @@ class JointModel:
             *self.params["alpha"].values(),
             *self.params["beta"].values(),
         ]
-        optimizer = optimizer(params=params, lr=lr)
+        optimizer = optimizer(params=params, **optimizer_params)
 
-        burn_in = int(torch.ceil(self.K))
+        warmup = int(K)
         curr_b = torch.zeros((self.n, self.f.input_dim[1]), dtype=torch.float32)
         curr_ll = torch.full((self.n,), -torch.inf, dtype=torch.float32)
+        mh = _MH(self._ll, curr_b, curr_ll, step_size, accept_step_size, accept_target)
 
         self._buckets = self._build_buckets(self.T, self.C)
 
         for _ in tqdm(range(n_iter), "Fitting..."):
-            ll, curr_b, curr_ll = self._mcmc(curr_b, curr_ll, burn_in, batch_size)
+            ll, curr_b, curr_ll = self._mcmc(mh, warmup, batch_size)
             nll = -ll
 
             params_before = [p.detach().clone() for p in params]
@@ -249,7 +269,7 @@ class JointModel:
                 sum(((p - pb) ** 2).sum() for pb, p in zip(params_before, params))
             ).item()
 
-            burn_in = int(torch.ceil(step_norm * self.K))
+            warmup = int(step_norm * K)
 
             if callback is not None:
                 callback()
@@ -258,7 +278,7 @@ class JointModel:
         self.fim = torch.zeros(d, d)
 
         for _ in tqdm(range(n_iter_fim), desc="Getting FIM..."):
-            ll, curr_b, curr_ll = self._mcmc(curr_b, curr_ll, 1, 1)
+            ll, curr_b, curr_ll = self._mcmc(mh, 1, 1)
 
             for p in params:
                 if p.grad is not None:
@@ -272,16 +292,16 @@ class JointModel:
 
     def get_ci(self, alpha=0.05):
         assert self.fit_
-    
+
         params = [v for v in self.params.values()]
         params = torch.concat([p.detach().flatten() for p in params])
 
         se = torch.sqrt(torch.linalg.pinv(self.fim).diag())
         q = torch.distributions.Normal(0, 1).icdf(torch.tensor(1 - alpha / 2))
-    
+
         lower = params - q * se
         upper = params + q * se
-    
+
         ci = {}
         i = 0
         for key, val in self.params.items():
@@ -292,7 +312,7 @@ class JointModel:
                     shape = subval.shape
                     ci[key][subkey] = {
                         "lower": lower[i : i + n].view(shape),
-                        "upper": upper[i : i + n].view(shape)
+                        "upper": upper[i : i + n].view(shape),
                     }
                     i += n
             else:
@@ -300,7 +320,7 @@ class JointModel:
                 shape = val.shape
                 ci[key] = {
                     "lower": lower[i : i + n].view(shape),
-                    "upper": upper[i : i + n].view(shape)
+                    "upper": upper[i : i + n].view(shape),
                 }
                 i += n
 
@@ -413,7 +433,7 @@ class JointModel:
         C,
         n_iter_b,
         n_iter_T,
-        burn_in,
+        warmup,
         max_iter=100,
     ):
         assert self.fit_
@@ -456,7 +476,7 @@ class JointModel:
 
         T_pred = []
         for _ in tqdm(range(n_iter_b), "Predicting..."):
-            for _ in range(burn_in):
+            for _ in range(warmup):
                 curr_b, curr_ll = dummy_jm._mh(
                     curr_b,
                     curr_ll,
