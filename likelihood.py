@@ -2,7 +2,7 @@ import torch
 from typing import Dict, Any
 import warnings
 
-from utils import _cholesky_from_flat, _precision_matrix_from_cholesky
+from utils import _tril_from_flat, _precision_matrix_from_cholesky
 
 
 class LikelihoodMixin:
@@ -107,7 +107,7 @@ class LikelihoodMixin:
                 warnings.warn("Invalid predictions encountered in longitudinal model")
 
             # Reconstruct precision matrix R_inv from Cholesky parametrization
-            R_inv = _cholesky_from_flat(self.params["R_inv"], self.h.output_dim)
+            R_inv = _tril_from_flat(self.params["R_inv"], self.h.output_dim)
 
             # Compute log determinant: log det = -2 * sum(log(diag(R_inv)))
             log_det_R = -torch.diag(R_inv).sum() * 2
@@ -151,7 +151,7 @@ class LikelihoodMixin:
 
         try:
             # Reconstruct precision matrix Q_inv from Cholesky parametrization
-            Q_inv = _cholesky_from_flat(self.params["Q_inv"], self.f.input_dim[1])
+            Q_inv = _tril_from_flat(self.params["Q_inv"], self.f.input_dim[1])
 
             # Compute log determinant: log det = -2 * sum(log(diag(Q_inv)))
             log_det_Q = -torch.diag(Q_inv).sum() * 2
