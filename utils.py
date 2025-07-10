@@ -3,7 +3,7 @@ import numpy as np
 from typing import Tuple
 
 
-def _cholesky_from_flat(flat: torch.Tensor, n: int) -> torch.Tensor:
+def _tril_from_flat(flat: torch.Tensor, n: int) -> torch.Tensor:
     """
     Reconstruct a lower triangular matrix from its flattened representation.
 
