@@ -413,7 +413,7 @@ class HazardMixin:
                         # Sample transition times
                         t_sample = self._sample_survival_time(
                             t0,
-                            t1 + 1,  # Extend upper bound
+                            t1 + 1e-8,  # Extend upper bound
                             x[idx],
                             psi[idx],
                             alpha,
