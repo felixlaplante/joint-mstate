@@ -76,7 +76,8 @@ class HazardMixin:
     def _cum_hazard(
         self,
         t0: torch.Tensor,
-        t1: torch.Tensor,
+        t1: torch.Tensor | None,
+        t2: torch.Tensor,
         x: torch.Tensor | None,
         psi: torch.Tensor,
         alpha: torch.Tensor,
@@ -88,7 +89,8 @@ class HazardMixin:
 
         Args:
             t0 (torch.Tensor): Start time.
-            t1 (torch.Tensor): End time.
+            t1 (torch.Tensor | None): Integration start time, if None, means t0.
+            t2 (torch.Tensor): End time.
             x (torch.Tensor | None): Covariates.
             psi (torch.Tensor): Inidivual parameters.
             alpha (torch.Tensor): Link linear parameters.
@@ -101,11 +103,15 @@ class HazardMixin:
         """
 
         # Reshape for broadcasting
-        t0, t1 = t0.view(-1, 1), t1.view(-1, 1)
+        t0, t1, t2 = (
+            t0.view(-1, 1),
+            t1.view(-1, 1) if t1 is not None else t0.view(-1, 1),
+            t2.view(-1, 1),
+        )
 
         # Transform to quadrature interval [-1, 1]
-        mid = 0.5 * (t0 + t1)
-        half = 0.5 * (t1 - t0)
+        mid = 0.5 * (t1 + t2)
+        half = 0.5 * (t2 - t1)
 
         # Evaluate at quadrature points
         ts = mid + half * self._std_nodes
@@ -215,18 +221,12 @@ class HazardMixin:
         # Generate exponential random variables
         target = -torch.log(torch.clamp(torch.rand(n), min=1e-8))
 
-        # Adjust target if conditioning on existing survival
-        if c is not None:
-            c = c.view(-1, 1)
-            cond_hazard = self._cum_hazard(t0, c, x, psi, alpha, beta, log_lambda0, g)
-            target += cond_hazard
-
         # Bisection search for survival times
         for _ in range(n_bissect):
             t_mid = 0.5 * (t_left + t_right)
 
             cumulative = self._cum_hazard(
-                t0, t_mid, x, psi, alpha, beta, log_lambda0, g
+                t0, c, t_mid, x, psi, alpha, beta, log_lambda0, g
             )
 
             # Update search bounds

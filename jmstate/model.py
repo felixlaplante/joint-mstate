@@ -579,11 +579,13 @@ class MultiStateJointModel(HazardMixin):
                 current_psi = sample_data.psi.index_select(0, idx)
                 current_surv = self.model_design.surv[key]
 
-                t1 = u[:, k]
+                t1 = sample_data.c
+                t2 = u[:, k]
 
                 alts_ll = self._cum_hazard(
                     t0,
                     t1,
+                    t2,
                     current_x,
                     current_psi,
                     current_alpha,
@@ -593,7 +595,7 @@ class MultiStateJointModel(HazardMixin):
 
                 nlog_probs[:, k].index_add_(0, idx, alts_ll)
 
-        log_probs = -nlog_probs
+        log_probs = torch.clamp(-nlog_probs, max=0.0)
 
         return log_probs
 
@@ -802,13 +804,11 @@ class MultiStateJointModel(HazardMixin):
                 # Transform to individual-specific parameters
                 psi = self.model_design.f(self.params_.gamma, current_b)
 
-                sample_data = SampleData(pred_data.x, pred_data.trajectories, psi)
-
-                c_log_probs = self.compute_surv_log_probs(
-                    sample_data, pred_data.c.view(-1, 1)
+                sample_data = SampleData(
+                    pred_data.x, pred_data.trajectories, psi, pred_data.c
                 )
-                u_log_probs = self.compute_surv_log_probs(sample_data, u)
-                current_log_probs = torch.clamp(u_log_probs - c_log_probs, max=0.0)
+
+                current_log_probs = self.compute_surv_log_probs(sample_data, u)
 
                 predicted_log_probs.append(current_log_probs)
 

@@ -168,6 +168,12 @@ class ModelData:
         ):
             raise ValueError("Trajectories must be sorted by time")
 
+        # Check if c is at least equal to the greatest part of each trajectory
+        if any(
+            trajectory[-1][0] > c for trajectory, c in zip(self.trajectories, self.c)
+        ):
+            raise ValueError("Last trajectory time must not be greater than c")
+
     @property
     def size(self) -> int:
         """Gets the number of individuals.
@@ -189,6 +195,7 @@ class SampleData:
         ValueError: If psi is not 2D.
         ValueError: If the number of individuals is inconsistent.
         ValueError: If the trajectories are not sorted by time.
+        ValueError: If the last trajectory time is greater than c
 
     Returns:
         _type_: The instance.
@@ -223,6 +230,7 @@ class SampleData:
             ValueError: If psi is not 2D.
             ValueError: If the number of individuals is inconsistent.
             ValueError: If the trajectories are not sorted by time.
+            ValueError: If the last trajectory time is greater than c
         """
 
         # Check for inf tensors
@@ -253,6 +261,14 @@ class SampleData:
             for trajectory in self.trajectories
         ):
             raise ValueError("Trajectories must be sorted by time")
+
+        # Check if c is at least equal to the greatest part of each trajectory
+        if self.c is not None:
+            if any(
+                trajectory[-1][0] > c
+                for trajectory, c in zip(self.trajectories, self.c)
+            ):
+                raise ValueError("Last trajectory time must not be greater than c")
 
     @property
     def size(self) -> int:
