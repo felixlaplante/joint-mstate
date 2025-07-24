@@ -1,5 +1,5 @@
 import warnings
-from typing import Callable, cast
+from typing import Callable
 
 import torch
 
@@ -90,15 +90,8 @@ class MetropolisHastingsSampler:
         # Generate proposal isotropic noise
         noise = torch.randn_like(self.current_state, dtype=torch.float32)
 
-        # Compute optimal directions
-        stds = self.current_state.std(dim=0) + 1e-6
-        direction = stds / cast(torch.Tensor, stds.norm())  # type: ignore
-
-        # Compute the optimal noise
-        noise_stds = torch.outer(self.step_sizes, direction)
-
         # Get the proposal
-        proposed_state = self.current_state + noise * noise_stds
+        proposed_state = self.current_state + noise * self.step_sizes.view(-1, 1)
 
         # Compute proposal log probability
         try:
