@@ -114,7 +114,7 @@ class HazardMixin:
         half = 0.5 * (t1 - c)
 
         # Evaluate at quadrature points
-        ts = mid + half * self._std_nodes
+        ts = torch.addmm(mid, half.view(-1, 1), self._std_nodes.view(1, -1))
 
         # Compute hazard at quadrature points
         log_hazard_vals = self._log_hazard(t0, ts, x, psi, alpha, beta, log_lambda0, g)
@@ -122,7 +122,7 @@ class HazardMixin:
         # Numerical integration using Gaussian quadrature
         hazard_vals = torch.exp(torch.clamp(log_hazard_vals, min=-50.0, max=50.0))
 
-        cum_hazard_vals = half.flatten() * (hazard_vals * self._std_weights).sum(dim=1)
+        cum_hazard_vals = half.view(-1) * (hazard_vals @ self._std_weights)
 
         return cum_hazard_vals
 
@@ -164,7 +164,7 @@ class HazardMixin:
         half = 0.5 * (t1 - t0)
 
         # Combine endpoint and quadrature points
-        ts = mid + half * self._one_and_std_nodes
+        ts = torch.addmm(mid, half.view(-1, 1), self._one_and_std_nodes.view(1, -1))
 
         # Compute log hazard at all points
         temp = self._log_hazard(t0, ts, x, psi, alpha, beta, log_lambda0, g)
@@ -176,9 +176,9 @@ class HazardMixin:
         )  # Hazard at quadrature points
 
         # Compute cumulative hazard using quadrature
-        cum_hazard_vals = half.flatten() * (hazard_vals * self._std_weights).sum(dim=1)
+        cum_hazard_vals = half.view(-1) * (hazard_vals @ self._std_weights)
 
-        return log_hazard_vals.flatten(), cum_hazard_vals
+        return log_hazard_vals.view(-1), cum_hazard_vals
 
     def _sample_trajectory_step(
         self,
@@ -234,4 +234,4 @@ class HazardMixin:
             t_left[accept_mask] = t_mid[accept_mask]
             t_right[~accept_mask] = t_mid[~accept_mask]
 
-        return t_right.flatten()
+        return t_right.view(-1)
