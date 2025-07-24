@@ -579,13 +579,12 @@ class MultiStateJointModel(HazardMixin):
                 current_psi = sample_data.psi.index_select(0, idx)
                 current_surv = self.model_design.surv[key]
 
-                t1 = sample_data.c
-                t2 = u[:, k]
+                t1 = u[:, k]
 
                 alts_ll = self._cum_hazard(
                     t0,
                     t1,
-                    t2,
+                    sample_data.c,
                     current_x,
                     current_psi,
                     current_alpha,

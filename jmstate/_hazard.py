@@ -76,8 +76,8 @@ class HazardMixin:
     def _cum_hazard(
         self,
         t0: torch.Tensor,
-        t1: torch.Tensor | None,
-        t2: torch.Tensor,
+        t1: torch.Tensor,
+        c: torch.Tensor | None,
         x: torch.Tensor | None,
         psi: torch.Tensor,
         alpha: torch.Tensor,
@@ -89,8 +89,8 @@ class HazardMixin:
 
         Args:
             t0 (torch.Tensor): Start time.
-            t1 (torch.Tensor | None): Integration start time, if None, means t0.
-            t2 (torch.Tensor): End time.
+            t1 (torch.Tensor): End time.
+            c (torch.Tensor | None): Integration start or censoring time, if None, means t0.
             x (torch.Tensor | None): Covariates.
             psi (torch.Tensor): Inidivual parameters.
             alpha (torch.Tensor): Link linear parameters.
@@ -103,15 +103,15 @@ class HazardMixin:
         """
 
         # Reshape for broadcasting
-        t0, t1, t2 = (
+        t0, t1, c = (
             t0.view(-1, 1),
-            t1.view(-1, 1) if t1 is not None else t0.view(-1, 1),
-            t2.view(-1, 1),
+            t1.view(-1, 1),
+            c.view(-1, 1) if c is not None else t0.view(-1, 1),
         )
 
         # Transform to quadrature interval [-1, 1]
-        mid = 0.5 * (t1 + t2)
-        half = 0.5 * (t2 - t1)
+        mid = 0.5 * (c + t1)
+        half = 0.5 * (t1 - c)
 
         # Evaluate at quadrature points
         ts = mid + half * self._std_nodes
@@ -226,7 +226,7 @@ class HazardMixin:
             t_mid = 0.5 * (t_left + t_right)
 
             cumulative = self._cum_hazard(
-                t0, c, t_mid, x, psi, alpha, beta, log_lambda0, g
+                t0, t_mid, c, x, psi, alpha, beta, log_lambda0, g
             )
 
             # Update search bounds
