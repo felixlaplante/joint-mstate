@@ -164,7 +164,7 @@ class HazardMixin:
 
         # Compute hazard at quadrature points
         log_hazard_vals = self._log_hazard(
-            t0, quad, x, psi, alpha, beta, log_base_hazard_fn, link
+            t0, quad, x, psi, alpha, beta, log_base_hazard_fn, link, cache
         )
 
         # Numerical integration using Gaussian quadrature
@@ -228,7 +228,7 @@ class HazardMixin:
 
         # Compute log hazard at all points
         temp = self._log_hazard(
-            t0, t1_and_quad, x, psi, alpha, beta, log_base_hazard_fn, link
+            t0, t1_and_quad, x, psi, alpha, beta, log_base_hazard_fn, link, cache
         )
 
         # Extract log hazard at endpoint and quadrature points
