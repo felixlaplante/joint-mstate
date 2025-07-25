@@ -3,17 +3,26 @@ from typing import Any, cast
 import numpy as np
 import torch
 
-from .utils import BaseHazardFn, LinkFn
+from .types import BaseHazardFn, LinkFn
 
 
 class HazardMixin:
     """Mixin class for hazard model computations."""
 
-    def _legendre_quad(self, n_quad: int) -> None:
+    def __init__(self, n_quad: int):
+        self._std_nodes, self._std_weights = self._legendre_quad(n_quad)
+
+        self._cache: dict[str, dict[Any, torch.Tensor]] = {"quad": {}, "base": {}}
+
+    @staticmethod
+    def _legendre_quad(n_quad: int) -> tuple[torch.Tensor, ...]:
         """Get the Legendre quadrature nodes and weights.
 
         Args:
             n_quad (int, optional): The number of quadrature points.
+
+        Returns:
+            tuple[torch.Tensor, ...]: The nodes and weights.
         """
         nodes, weights = cast(
             tuple[
@@ -22,11 +31,15 @@ class HazardMixin:
             ],
             np.polynomial.legendre.leggauss(n_quad),  #  type: ignore
         )
-        self._std_nodes = torch.tensor(nodes, dtype=torch.float32)
-        self._std_weights = torch.tensor(weights, dtype=torch.float32)
-        self._one_and_std_nodes = torch.cat(
-            [torch.ones(1, dtype=torch.float32), self._std_nodes]
-        )
+
+        std_nodes = torch.tensor(nodes, dtype=torch.float32)
+        std_weights = torch.tensor(weights, dtype=torch.float32)
+
+        return std_nodes, std_weights
+
+    def clear_cache(self) -> None:
+        """Clears the cached tensors"""
+        self._cache = {"quad": {}, "base": {}}
 
     def _log_hazard(
         self,
@@ -56,7 +69,12 @@ class HazardMixin:
         """
 
         # Compute baseline hazard
-        base = log_lambda0(t0, t1)
+        key = (id(log_lambda0), id(t0.untyped_storage()), id(t1.untyped_storage()))
+        try:
+            base = self._cache["base"][key]
+        except:
+            base = log_lambda0(t0, t1)
+            self._cache["base"][key] = base
 
         # Compute time-varying effects
         mod = g(t1, x, psi) @ alpha
@@ -109,12 +127,18 @@ class HazardMixin:
             c.view(-1, 1) if c is not None else t0.view(-1, 1),
         )
 
-        # Transform to quadrature interval [-1, 1]
-        mid = 0.5 * (c + t1)
+        # Transform to quadrature interval
         half = 0.5 * (t1 - c)
 
-        # Evaluate at quadrature points
-        ts = torch.addmm(mid, half.view(-1, 1), self._std_nodes.view(1, -1))
+        key = (id(c.untyped_storage()), id(t1.untyped_storage()))
+        try:
+            ts = self._cache["quad"][key]
+        except:
+            mid = 0.5 * (c + t1)
+
+            # Evaluate at quadrature points
+            ts = torch.addmm(mid, half.view(-1, 1), self._std_nodes.view(1, -1))
+            self._cache["quad"][key] = ts
 
         # Compute hazard at quadrature points
         log_hazard_vals = self._log_hazard(t0, ts, x, psi, alpha, beta, log_lambda0, g)
@@ -160,11 +184,21 @@ class HazardMixin:
         t0, t1 = t0.view(-1, 1), t1.view(-1, 1)
 
         # Transform to quadrature interval
-        mid = 0.5 * (t0 + t1)
         half = 0.5 * (t1 - t0)
 
-        # Combine endpoint and quadrature points
-        ts = torch.addmm(mid, half.view(-1, 1), self._one_and_std_nodes.view(1, -1))
+        key = (id(t0.untyped_storage()), id(t1.untyped_storage()))
+
+        try:
+            ts = self._cache["quad"][key]
+        except:
+            # Combine endpoint and quadrature points
+            mid = 0.5 * (t0 + t1)
+
+            ts = torch.addmm(mid, half.view(-1, 1), self._std_nodes.view(1, -1))
+            self._cache["quad"][key] = ts
+
+        # Combine with t1
+        ts = torch.cat([t1, ts], dim=1)
 
         # Compute log hazard at all points
         temp = self._log_hazard(t0, ts, x, psi, alpha, beta, log_lambda0, g)

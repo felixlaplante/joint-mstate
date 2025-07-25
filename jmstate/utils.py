@@ -2,24 +2,12 @@ import itertools
 from math import isqrt
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Callable, DefaultDict, TypeAlias
+from typing import Any, Iterable, DefaultDict
 
 import torch
 
-
-# Type Aliases
-RegressionFn: TypeAlias = Callable[
-    [torch.Tensor, torch.Tensor | None, torch.Tensor], torch.Tensor
-]
-LinkFn: TypeAlias = Callable[
-    [torch.Tensor, torch.Tensor | None, torch.Tensor], torch.Tensor
-]
-IndividualEffectsFn: TypeAlias = Callable[
-    [torch.Tensor | None, torch.Tensor], torch.Tensor
-]
-BaseHazardFn: TypeAlias = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
-Trajectory: TypeAlias = list[tuple[float, Any]]
-ClockMethod: TypeAlias = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+from .types import *
+from ._utils import *
 
 
 @dataclass
@@ -89,13 +77,7 @@ class ModelData:
     y: torch.Tensor
     trajectories: list[Trajectory]
     c: torch.Tensor
-    valid_t_: torch.Tensor = field(init=False, repr=False)
-    valid_y_: torch.Tensor = field(init=False, repr=False)
-    valid_mask_: torch.Tensor = field(init=False, repr=False)
-    n_valid_: torch.Tensor = field(init=False, repr=False)
-    buckets_: dict[tuple[int, int], tuple[torch.Tensor, ...]] = field(
-        init=False, repr=False
-    )
+    extra_: dict[Any, Any] = field(default_factory=dict[Any, Any], repr=False)
 
     def __post_init__(self):
         """Runs the post init conversions and checks."""
@@ -173,6 +155,22 @@ class ModelData:
             trajectory[-1][0] > c for trajectory, c in zip(self.trajectories, self.c)
         ):
             raise ValueError("Last trajectory time must not be greater than c")
+
+    def prepare(self, model_design: ModelDesign) -> None:
+        """Add derived quantities.
+
+        Args:
+            data (ModelData): The current dataset.
+        Raises:
+            TypeError: If self.params_.betas is None and x is not None or the other way around.
+        """
+
+        # Add derived quantities
+        self.extra_["valid_mask"] = ~torch.isnan(self.y)
+        self.extra_["n_valid"] = self.extra_["valid_mask"].sum(dim=1)
+        self.extra_["valid_t"] = torch.nan_to_num(self.t)
+        self.extra_["valid_y"] = torch.nan_to_num(self.y)
+        self.extra_["buckets"] = build_vec_rep(self.trajectories, self.c, model_design.surv)
 
     @property
     def size(self) -> int:
@@ -532,34 +530,6 @@ def _tril_from_flat(flat: torch.Tensor, n: int) -> torch.Tensor:
     return L
 
 
-def _flat_from_tril(L: torch.Tensor) -> torch.Tensor:
-    """Flatten the lower triangular part (including the diagonal) of a square matrix L
-    into a 1D tensor, in row-wise order.
-
-    Args:
-        L (torch.Tensor): Square lower-triangular matrix of shape (n, n).
-
-    Raises:
-        ValueError: If the input is not square.
-        RuntimeError: If the flattening fails.
-
-    Returns:
-        torch.Tensor: Flattened 1D tensor containing the lower triangular entries.
-    """
-
-    try:
-        if L.ndim != 2 or L.shape[0] != L.shape[1]:
-            raise ValueError("Input must be a square matrix")
-
-        n = L.shape[0]
-        i, j = torch.tril_indices(n, n)
-
-        return L[i, j]
-
-    except Exception as e:
-        raise RuntimeError(f"Failed to flatten matrix: {e}") from e
-
-
 def log_cholesky_from_flat(
     flat: torch.Tensor, n: int, method: str = "full"
 ) -> torch.Tensor:
@@ -619,7 +589,7 @@ def flat_from_log_cholesky(L: torch.Tensor, method: str = "full") -> torch.Tenso
 
     match method:
         case "full":
-            return _flat_from_tril(L)
+            return flat_from_tril(L)
         case "diag":
             return L.diagonal()
         case "ball":

@@ -1,14 +1,13 @@
 import copy
 import warnings
-import itertools
-from collections import defaultdict
-from typing import Any, DefaultDict, Dict
+from typing import Any, Dict
 
 import torch
 from tqdm import tqdm
 
 from ._hazard import HazardMixin
 from ._sampler import MetropolisHastingsSampler
+from .types import *
 from .utils import *
 
 
@@ -54,11 +53,9 @@ class MultiStateJointModel(HazardMixin):
             torch.tensor(0.0, dtype=torch.float32) if pen is None else pen(params)
         )
 
-        # Set up numerical integration
+        # Info of numerical integration
         self.n_quad = n_quad
-        self._std_nodes = None
-        self._std_weights = None
-        self._legendre_quad(self.n_quad)
+        super().__init__(n_quad)
 
         # Set up for bissection algorithm
         self.n_bissect = n_bissect
@@ -81,7 +78,7 @@ class MultiStateJointModel(HazardMixin):
 
         ll = torch.zeros(data.size, dtype=torch.float32)
 
-        for key, bucket in data.buckets_.items():
+        for key, bucket in data.extra_["buckets"].items():
             idx, t0, t1, obs = bucket
 
             current_alpha = self.params_.alphas[key]
@@ -119,8 +116,8 @@ class MultiStateJointModel(HazardMixin):
         """
 
         # Compute residuals: observed - predicted (only for valid observations)
-        predicted = self.model_design.h(data.valid_t_, data.x, psi)
-        diffs = data.valid_y_ - predicted * data.valid_mask_
+        predicted = self.model_design.h(data.extra_["valid_t"], data.x, psi)
+        diffs = data.extra_["valid_y"] - predicted * data.extra_["valid_mask"]
 
         # Reconstruct precision matrix R_inv from Cholesky parametrization and logdet
         R_inv_cholesky, R_log_eigvals = self.params_.get_cholesky_and_log_eigvals("R")
@@ -129,7 +126,7 @@ class MultiStateJointModel(HazardMixin):
         R_quad_forms = (diffs @ R_inv_cholesky).pow(2).sum(dim=(1, 2))
 
         # Compute total log det for each individual
-        R_log_dets = torch.einsum("ij,j->i", data.n_valid_, R_log_eigvals)
+        R_log_dets = torch.einsum("ij,j->i", data.extra_["n_valid"], R_log_eigvals)
 
         # Log likelihood
         ll = 0.5 * (R_log_dets - R_quad_forms)
@@ -186,98 +183,6 @@ class MultiStateJointModel(HazardMixin):
         total_ll = long_ll + hazard_ll + prior_ll
 
         return total_ll
-
-    def _build_vec_rep(
-        self, trajectories: list[Trajectory], c: torch.Tensor
-    ) -> dict[tuple[int, int], tuple[torch.Tensor, ...]]:
-        """Build vectorizable bucket representation.
-
-        Args:
-            trajectories (list[Trajectory]): The trajectories.
-            c (torch.Tensor): Censoring times.
-
-        Raises:
-            ValueError: If some keys are not in self.surv.
-            RuntimeError: If the building fails.
-
-        Returns:
-            dict[tuple[int, int], tuple[torch.Tensor, ...]]: The vectorizable buckets representation.
-        """
-
-        try:
-            # Get survival transitions defined in the model
-            trans = set(self.model_design.surv.keys())
-
-            # Build alternative state mapping
-            alt_map: DefaultDict[int, list[int]] = defaultdict(list)
-            for from_state, to_state in trans:
-                alt_map[from_state].append(to_state)
-
-            # Initialize buckets
-            buckets: DefaultDict[tuple[int, int], list[list[Any]]] = defaultdict(
-                lambda: [[], [], [], []]
-            )
-
-            # Process each individual trajectory
-            for i, trajectory in enumerate(trajectories):
-                # Add censoring
-                ext_trajectory = trajectory + [(float(c[i]), None)]
-
-                for (t0, s0), (t1, s1) in itertools.pairwise(ext_trajectory):
-                    if t0 >= t1:
-                        continue
-
-                    if s1 is not None and (s0, s1) not in trans:
-                        raise ValueError(
-                            f"Transition {(s0, s1)} must be in model_design.surv keys"
-                        )
-
-                    for alt_state in alt_map.get(s0, []):
-                        key = (s0, alt_state)
-                        buckets[key][0].append(i)
-                        buckets[key][1].append(t0)
-                        buckets[key][2].append(t1)
-                        buckets[key][3].append(alt_state == s1)
-
-            processed_buckets: dict[tuple[int, int], tuple[torch.Tensor, ...]] = {
-                key: (
-                    torch.tensor(vals[0], dtype=torch.int64),
-                    torch.tensor(vals[1], dtype=torch.float32),
-                    torch.tensor(vals[2], dtype=torch.float32),
-                    torch.tensor(vals[3], dtype=torch.bool),
-                )
-                for key, vals in buckets.items()
-                if vals[0]
-            }
-
-            return processed_buckets
-
-        except Exception as e:
-            raise RuntimeError(f"Error building survival buckets: {e}") from e
-
-    def _prepare_data(self, data: ModelData) -> None:
-        """Add derived quantities.
-
-        Args:
-            data (ModelData): The current dataset.
-        Raises:
-            TypeError: If self.params_.betas is None and x is not None or the other way around.
-        """
-
-        # Check self.params_.betas and data.x types TypeError: If self.params_.betas is None and x is not None or the other way around.
-        if (self.params_.betas is None and data.x is not None) or (
-            self.params_.betas is not None and data.x is None
-        ):
-            raise TypeError(
-                "self.params_.betas and data.x should be either both None, or neither"
-            )
-
-        # Add derived quantities
-        data.valid_mask_ = ~torch.isnan(data.y)
-        data.n_valid_ = data.valid_mask_.sum(dim=1)
-        data.valid_t_ = torch.nan_to_num(data.t)
-        data.valid_y_ = torch.nan_to_num(data.y)
-        data.buckets_ = self._build_vec_rep(data.trajectories, data.c)
 
     def _setup_mcmc(
         self,
@@ -341,7 +246,14 @@ class MultiStateJointModel(HazardMixin):
             target_accept_rate (float, optional): Mean acceptation target. Defaults to 0.234.
             init_warmup (int, optional): The number of iteration steps used in the warmup. Defaults to 500.
             cont_warmup (int, optional): The warmup step in-between each parameter changes. Defaults to 5.
+
+        Raises:
+            ValueError: If batch_size is not greater than 0.
         """
+
+        # Verify batch_size
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be greater than 0, got {batch_size}")
 
         # Load and complete data
         x_rep = data.x.repeat(batch_size, 1) if data.x is not None else None
@@ -352,7 +264,8 @@ class MultiStateJointModel(HazardMixin):
 
         data_rep = ModelData(x_rep, t_rep, y_rep, trajectories_rep, c_rep)
 
-        self._prepare_data(data_rep)
+        # Prepare data
+        data_rep.prepare(self.model_design)
 
         # Set up optimizer
         self.params_.require_grad(True)
@@ -395,6 +308,7 @@ class MultiStateJointModel(HazardMixin):
 
         # Set fit_ to True
         self.fit_ = True
+        self.clear_cache()
 
     def _compute_fim(
         self,
@@ -424,7 +338,8 @@ class MultiStateJointModel(HazardMixin):
                 "Model should be fit before computing Fisher Information Matrix"
             )
 
-        self._prepare_data(data)
+        # Prepare data
+        data.prepare(self.model_design)
 
         # Set up MCMC for prediction
         sampler = self._setup_mcmc(data, step_size, adapt_rate, accept_target)
@@ -468,6 +383,8 @@ class MultiStateJointModel(HazardMixin):
         if torch.isnan(self.fim_).any() or torch.isinf(self.fim_).any():
             warnings.warn("Error computing Fisher Information Matrix")
             self.fim_ = None
+
+        self.clear_cache()
 
     def get_stderror(self) -> ModelParams:
         """Returns the standard error of the parameters that can be used to
@@ -557,8 +474,10 @@ class MultiStateJointModel(HazardMixin):
             )
 
         last_states = [trajectory[-1:] for trajectory in sample_data.trajectories]
-        buckets = self._build_vec_rep(
-            last_states, torch.full((sample_data.size,), torch.inf)
+        buckets = build_vec_rep(
+            last_states,
+            torch.full((sample_data.size,), torch.inf),
+            self.model_design.surv,
         )
 
         nlog_probs = torch.zeros_like(u)
@@ -633,7 +552,7 @@ class MultiStateJointModel(HazardMixin):
 
             # Get initial buckets from last states
             last_states = [trajectory[-1:] for trajectory in trajectories]
-            current_buckets = self._build_vec_rep(last_states, c_max)
+            current_buckets = build_vec_rep(last_states, c_max, self.model_design.surv)
 
             # Sample future transitions iteratively
             for iteration in range(max_length):
@@ -718,7 +637,9 @@ class MultiStateJointModel(HazardMixin):
 
                 # Update buckets for next iteration
                 last_states = [trajectory[-1:] for trajectory in trajectories]
-                current_buckets = self._build_vec_rep(last_states, c_max)
+                current_buckets = build_vec_rep(
+                    last_states, c_max, self.model_design.surv
+                )
 
             # Remove transitions that exceed censoring times
             for i, trajectory in enumerate(trajectories):
@@ -727,9 +648,11 @@ class MultiStateJointModel(HazardMixin):
                 if trajectory[-1][0] > censoring_time:
                     trajectories[i] = trajectory[:-1]
 
+            self.clear_cache()
             return trajectories
 
         except Exception as e:
+            self.clear_cache()
             raise RuntimeError(f"Error in trajectory sampling: {e}") from e
 
     def predict_surv_log_probs(
@@ -758,7 +681,6 @@ class MultiStateJointModel(HazardMixin):
             max_length (int, optional): Maximum iterations or sampling (prevents infinite loops). Defaults to 100.
 
         Raises:
-            TypeError: If self.params_.betas is None and x is not None or the other way around.
             ValueError: If u is of incorrect shape.
             RuntimeError: If the computation fails.
 
@@ -783,7 +705,7 @@ class MultiStateJointModel(HazardMixin):
                 )
 
             # Load and complete prediction data
-            self._prepare_data(pred_data)
+            pred_data.prepare(self.model_design)
 
             # Set up MCMC for prediction
             sampler = self._setup_mcmc(pred_data, step_size, adapt_rate, accept_target)
@@ -845,7 +767,7 @@ class MultiStateJointModel(HazardMixin):
             max_length (int, optional): Maximum iterations or sampling (prevents infinite loops). Defaults to 100.
 
         Raises:
-            TypeError: If self.params_.betas is None and x is not None or the other way around.
+            ValueError: If n_iter_T is not greater than 0.
             RuntimeError: If the prediction fails.
 
         Returns:
@@ -869,13 +791,16 @@ class MultiStateJointModel(HazardMixin):
                 )
 
             # Load and complete prediction data
-            self._prepare_data(pred_data)
 
             # Set up MCMC for prediction
             sampler = self._setup_mcmc(pred_data, step_size, adapt_rate, accept_target)
 
             # Warmup MCMC
             sampler.warmup(init_warmup)
+
+            # Check n_iter_T
+            if n_iter_T < 1:
+                raise ValueError(f"n_iter_T must be greater than 0, got {n_iter_T}")
 
             # Prepare replicate data for trajectory sampling
             x_rep = pred_data.x.repeat(n_iter_T, 1) if pred_data.x is not None else None
@@ -913,7 +838,9 @@ class MultiStateJointModel(HazardMixin):
 
                 predicted_trajectories.append(trajectory_chunks)
 
+            self.clear_cache()
             return predicted_trajectories
 
         except Exception as e:
+            self.clear_cache()
             raise RuntimeError(f"Error in survival prediction: {e}") from e
