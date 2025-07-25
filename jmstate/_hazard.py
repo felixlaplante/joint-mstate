@@ -22,6 +22,7 @@ class HazardMixin:
 
         self.n_quad = n_quad
         self.cache_limit = cache_limit
+
         self._std_nodes, self._std_weights = legendre_quad(n_quad)
         self._cache = _EMPTY_CACHE
 
@@ -203,8 +204,6 @@ class HazardMixin:
         t0, t1 = t0.view(-1, 1), t1.view(-1, 1)
 
         # Transform to quadrature interval
-        half = 0.5 * (t1 - t0)
-
         key = (id(t0.untyped_storage()), id(t1.untyped_storage()))
         try:
             half = self._get_cache("half", key)
