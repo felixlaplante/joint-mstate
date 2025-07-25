@@ -27,6 +27,7 @@ class MultiStateJointModel(HazardMixin):
         *,
         pen: Callable[[ModelParams], torch.Tensor] | None = None,
         n_quad: int = 16,
+        cache_limit: int = 1000,
         n_bissect: int = 16,
     ):
         """Initializes the joint model based on the user defined design.
@@ -36,6 +37,7 @@ class MultiStateJointModel(HazardMixin):
             init_params (ModelParams): Initial values for the parameters.
             pen (Callable[[ModelParams], torch.Tensor] | None, optional): The penalization function. Defaults to None.
             n_quad (int, optional): The used numnber of points for Gauss-Legendre quadrature. Defaults to 16.
+            cache_limit (int, optional): The max length of cache.
             n_bissect (int, optional): The number of bissection steps used in transition sampling. Defaults to 16.
 
         Raises:
@@ -53,9 +55,8 @@ class MultiStateJointModel(HazardMixin):
             torch.tensor(0.0, dtype=torch.float32) if pen is None else pen(params)
         )
 
-        # Info of numerical integration
-        self.n_quad = n_quad
-        super().__init__(n_quad)
+        # Info of numerical integration and cache
+        super().__init__(n_quad, cache_limit)
 
         # Set up for bissection algorithm
         self.n_bissect = n_bissect

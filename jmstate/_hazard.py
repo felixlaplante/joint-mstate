@@ -1,4 +1,4 @@
-from typing import Any, cast
+from typing import Any
 
 import torch
 
@@ -6,18 +6,53 @@ from .types import BaseHazardFn, LinkFn
 from ._utils import legendre_quad
 
 
+_EMPTY_CACHE: dict[str, dict[Any, torch.Tensor]] = {"half": {}, "quad": {}, "base": {}}
+
+
 class HazardMixin:
     """Mixin class for hazard model computations."""
 
-    def __init__(self, n_quad: int):
-        self._std_nodes, self._std_weights = legendre_quad(n_quad)
+    def __init__(self, n_quad: int, cache_limit: int):
+        """Initializes the class.
 
-        self._cache: dict[str, dict[Any, torch.Tensor]] = {"quad": {}, "base": {}}
+        Args:
+            n_quad (int): Number of quadrature nodes.
+            cache_limit (int): Max length of cache.
+        """
+
+        self.n_quad = n_quad
+        self.cache_limit = cache_limit
+        self._std_nodes, self._std_weights = legendre_quad(n_quad)
+        self._cache = _EMPTY_CACHE
+
+    def _get_cache(self, name: str, key: Any) -> torch.Tensor:
+        """Gets the cache [name][key]
+
+        Args:
+            name (str): The name of the cache info.
+            key (Any): The key inside the current info.
+
+        Returns:
+            torch.Tensor: The cached tensor.
+        """
+        return self._cache[name][key]
+
+    def _add_cache(self, name: str, key: Any, val: torch.Tensor) -> None:
+        """Add value to cache if not exceeding the limit.
+
+        Args:
+            name (str): name (str): The name of the cache info.
+            key (Any): The key inside the current info.
+            val (torch.Tensor): The tensor to cache.
+        """
+
+        if len(self._cache[name]) <= self.cache_limit:
+            self._cache[name][key] = val
 
     def clear_cache(self) -> None:
         """Clears the cached tensors"""
 
-        self._cache = {"quad": {}, "base": {}}
+        self._cache = _EMPTY_CACHE
 
     def _log_hazard(
         self,
@@ -27,8 +62,8 @@ class HazardMixin:
         psi: torch.Tensor,
         alpha: torch.Tensor,
         beta: torch.Tensor | None,
-        log_lambda0: BaseHazardFn,
-        g: LinkFn,
+        log_base_hazard_fn: BaseHazardFn,
+        link: LinkFn,
     ) -> torch.Tensor:
         """Computes log hazard.
 
@@ -39,30 +74,32 @@ class HazardMixin:
             psi (torch.Tensor): Inidivual parameters.
             alpha (torch.Tensor): Link linear parameters.
             beta (torch.Tensor): Covariate linear parameters.
-            log_lambda0 (BaseHazardFn): Base hazard function.
-            g (LinkFn): Link function.
+            log_base_hazard_fn (BaseHazardFn): Base hazard function.
+            link (LinkFn): Link function.
 
         Returns:
             torch.Tensor: The computed log hazard.
         """
 
         # Compute baseline hazard
-        key = (id(log_lambda0), id(t0.untyped_storage()), id(t1.untyped_storage()))
+        key = (
+            id(log_base_hazard_fn),
+            id(t0.untyped_storage()),
+            id(t1.untyped_storage()),
+        )
         try:
-            base = self._cache["base"][key]
+            base = self._get_cache("base", key)
         except:
-            base = log_lambda0(t0, t1)
-            self._cache["base"][key] = base
+            base = log_base_hazard_fn(t0, t1)
+            self._add_cache("base", key, base)
 
         # Compute time-varying effects
-        mod = g(t1, x, psi) @ alpha
+        mod = link(t1, x, psi) @ alpha
 
         # Compute covariates effect
-        cov = (
-            x @ beta.unsqueeze(1)
-            if x is not None and beta is not None
-            else torch.tensor(0.0, dtype=torch.float32)
-        )
+        cov = torch.tensor(0.0, dtype=torch.float32)
+        if x is not None and beta is not None:
+            cov = x @ beta.unsqueeze(1)
 
         # Compute the total
         log_hazard_vals = base + mod + cov
@@ -78,8 +115,8 @@ class HazardMixin:
         psi: torch.Tensor,
         alpha: torch.Tensor,
         beta: torch.Tensor | None,
-        log_lambda0: BaseHazardFn,
-        g: LinkFn,
+        log_base_hazard_fn: BaseHazardFn,
+        link: LinkFn,
     ) -> torch.Tensor:
         """Computes cumulative hazard.
 
@@ -91,8 +128,8 @@ class HazardMixin:
             psi (torch.Tensor): Inidivual parameters.
             alpha (torch.Tensor): Link linear parameters.
             beta (torch.Tensor): Covariate linear parameters.
-            log_lambda0 (BaseHazardFn): Base hazard function.
-            g (LinkFn): Link function.
+            log_base_hazard_fn (BaseHazardFn): Base hazard function.
+            link (LinkFn): Link function.
 
         Returns:
             torch.Tensor: The computed cumulative hazard.
@@ -106,20 +143,24 @@ class HazardMixin:
         )
 
         # Transform to quadrature interval
-        half = 0.5 * (t1 - c)
-
         key = (id(c.untyped_storage()), id(t1.untyped_storage()))
         try:
-            ts = self._cache["quad"][key]
+            half = self._get_cache("half", key)
+            quad = self._get_cache("quad", key)
+
         except:
-            mid = 0.5 * (c + t1)
+            half = 0.5 * (t1 - c)
+            self._add_cache("half", key, half)
 
             # Evaluate at quadrature points
-            ts = torch.addmm(mid, half.view(-1, 1), self._std_nodes.view(1, -1))
-            self._cache["quad"][key] = ts
+            mid = 0.5 * (c + t1)
+            quad = torch.addmm(mid, half.view(-1, 1), self._std_nodes.view(1, -1))
+            self._add_cache("quad", key, quad)
 
         # Compute hazard at quadrature points
-        log_hazard_vals = self._log_hazard(t0, ts, x, psi, alpha, beta, log_lambda0, g)
+        log_hazard_vals = self._log_hazard(
+            t0, quad, x, psi, alpha, beta, log_base_hazard_fn, link
+        )
 
         # Numerical integration using Gaussian quadrature
         hazard_vals = torch.exp(torch.clamp(log_hazard_vals, min=-50.0, max=50.0))
@@ -136,8 +177,8 @@ class HazardMixin:
         psi: torch.Tensor,
         alpha: torch.Tensor,
         beta: torch.Tensor | None,
-        log_lambda0: BaseHazardFn,
-        g: LinkFn,
+        log_base_hazard_fn: BaseHazardFn,
+        link: LinkFn,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Computes both log and cumulative hazard.
 
@@ -148,8 +189,8 @@ class HazardMixin:
             psi (torch.Tensor): Inidivual parameters.
             alpha (torch.Tensor): Link linear parameters.
             beta (torch.Tensor): Covariate linear parameters.
-            log_lambda0 (BaseHazardFn): Base hazard function.
-            g (LinkFn): Link function.
+            log_base_hazard_fn (BaseHazardFn): Base hazard function.
+            link (LinkFn): Link function.
 
         Raises:
             RuntimeError: If the computation fails.
@@ -165,21 +206,26 @@ class HazardMixin:
         half = 0.5 * (t1 - t0)
 
         key = (id(t0.untyped_storage()), id(t1.untyped_storage()))
-
         try:
-            ts = self._cache["quad"][key]
-        except:
-            # Combine endpoint and quadrature points
-            mid = 0.5 * (t0 + t1)
+            half = self._get_cache("half", key)
+            quad = self._get_cache("quad", key)
 
-            ts = torch.addmm(mid, half.view(-1, 1), self._std_nodes.view(1, -1))
-            self._cache["quad"][key] = ts
+        except:
+            half = 0.5 * (t1 - t0)
+            self._add_cache("half", key, half)
+
+            # Evaluate at quadrature points
+            mid = 0.5 * (t0 + t1)
+            quad = torch.addmm(mid, half.view(-1, 1), self._std_nodes.view(1, -1))
+            self._add_cache("quad", key, quad)
 
         # Combine with t1
-        ts = torch.cat([t1, ts], dim=1)
+        t1_and_quad = torch.cat([t1, quad], dim=1)
 
         # Compute log hazard at all points
-        temp = self._log_hazard(t0, ts, x, psi, alpha, beta, log_lambda0, g)
+        temp = self._log_hazard(
+            t0, t1_and_quad, x, psi, alpha, beta, log_base_hazard_fn, link
+        )
 
         # Extract log hazard at endpoint and quadrature points
         log_hazard_vals = temp[:, :1]  # Log hazard at t1
@@ -200,8 +246,8 @@ class HazardMixin:
         psi: torch.Tensor,
         alpha: torch.Tensor,
         beta: torch.Tensor | None,
-        log_lambda0: BaseHazardFn,
-        g: LinkFn,
+        log_base_hazard_fn: BaseHazardFn,
+        link: LinkFn,
         *,
         c: torch.Tensor | None = None,
         n_bissect: int,
@@ -215,8 +261,8 @@ class HazardMixin:
             psi (torch.Tensor): Inidivual parameters.
             alpha (torch.Tensor): Link linear parameters.
             beta (torch.Tensor): Covariate linear parameters.
-            log_lambda0 (BaseHazardFn): Base hazard function.
-            g (LinkFn): Link function.
+            log_base_hazard_fn (BaseHazardFn): Base hazard function.
+            link (LinkFn): Link function.
             n_bissect (int): _description_
             c (torch.Tensor | None, optional): _description_. Defaults to None.
 
@@ -238,7 +284,7 @@ class HazardMixin:
             t_mid = 0.5 * (t_left + t_right)
 
             cumulative = self._cum_hazard(
-                t0, t_mid, c, x, psi, alpha, beta, log_lambda0, g
+                t0, t_mid, c, x, psi, alpha, beta, log_base_hazard_fn, link
             )
 
             # Update search bounds
