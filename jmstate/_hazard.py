@@ -66,6 +66,7 @@ class HazardMixin:
         beta: torch.Tensor | None,
         log_base_hazard_fn: BaseHazardFn,
         link: LinkFn,
+        cache: bool = True,
     ) -> torch.Tensor:
         """Computes log hazard.
 
@@ -78,6 +79,7 @@ class HazardMixin:
             beta (torch.Tensor): Covariate linear parameters.
             log_base_hazard_fn (BaseHazardFn): Base hazard function.
             link (LinkFn): Link function.
+            cache (bool, optional): Enables caching. Defaults to True.
 
         Returns:
             torch.Tensor: The computed log hazard.
@@ -86,13 +88,12 @@ class HazardMixin:
         # Compute baseline hazard
         key = (
             id(log_base_hazard_fn),
-            id(t0),
-            id(t1),
+            t0.data_ptr(),
+            t1.data_ptr(),
         )
-        try:
+        if key in self._cache["base"] and cache:
             base = self._get_cache("base", key)
-
-        except:
+        else:
             base = log_base_hazard_fn(t0, t1)
             self._add_cache("base", key, base)
 
@@ -120,6 +121,7 @@ class HazardMixin:
         beta: torch.Tensor | None,
         log_base_hazard_fn: BaseHazardFn,
         link: LinkFn,
+        cache: bool = True,
     ) -> torch.Tensor:
         """Computes cumulative hazard.
 
@@ -133,6 +135,7 @@ class HazardMixin:
             beta (torch.Tensor): Covariate linear parameters.
             log_base_hazard_fn (BaseHazardFn): Base hazard function.
             link (LinkFn): Link function.
+            cache (bool, optional): Enables caching. Defaults to True.
 
         Returns:
             torch.Tensor: The computed cumulative hazard.
@@ -146,12 +149,11 @@ class HazardMixin:
         )
 
         # Transform to quadrature interval
-        key = (id(c), id(t1))
-        try:
+        key = (c.data_ptr(), t1.data_ptr())
+        if key in self._cache["half"] and key in self._cache["quad"] and cache:
             half = self._get_cache("half", key)
             quad = self._get_cache("quad", key)
-
-        except:
+        else:
             half = 0.5 * (t1 - c)
             self._add_cache("half", key, half)
 
@@ -182,6 +184,7 @@ class HazardMixin:
         beta: torch.Tensor | None,
         log_base_hazard_fn: BaseHazardFn,
         link: LinkFn,
+        cache: bool = True
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Computes both log and cumulative hazard.
 
@@ -194,6 +197,7 @@ class HazardMixin:
             beta (torch.Tensor): Covariate linear parameters.
             log_base_hazard_fn (BaseHazardFn): Base hazard function.
             link (LinkFn): Link function.
+            cache (bool, optional): Enables caching. Defaults to True.
 
         Raises:
             RuntimeError: If the computation fails.
@@ -206,12 +210,11 @@ class HazardMixin:
         t0, t1 = t0.view(-1, 1), t1.view(-1, 1)
 
         # Transform to quadrature interval
-        key = (id(t0), id(t1))
-        try:
+        key = (t0.data_ptr(), t1.data_ptr())
+        if key in self._cache["half"] and key in self._cache["quad"] and cache:
             half = self._cache["half"][key]
             quad = self._get_cache("quad", key)
-
-        except:
+        else:
             half = 0.5 * (t1 - t0)
             self._add_cache("half", key, half)
 
@@ -285,7 +288,7 @@ class HazardMixin:
             t_mid = 0.5 * (t_left + t_right)
 
             cumulative = self._cum_hazard(
-                t0, t_mid, c, x, psi, alpha, beta, log_base_hazard_fn, link
+                t0, t_mid, c, x, psi, alpha, beta, log_base_hazard_fn, link, False
             )
 
             # Update search bounds

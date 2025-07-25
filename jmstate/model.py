@@ -26,9 +26,9 @@ class MultiStateJointModel(HazardMixin):
         init_params: ModelParams,
         *,
         pen: Callable[[ModelParams], torch.Tensor] | None = None,
-        n_quad: int = 16,
+        n_quad: int = 32,
         cache_limit: int = 1000,
-        n_bissect: int = 16,
+        n_bissect: int = 32,
     ):
         """Initializes the joint model based on the user defined design.
 
@@ -36,9 +36,9 @@ class MultiStateJointModel(HazardMixin):
             model_design (ModelDesign): Model design containing regression, base hazard and link functions and model dimensions.
             init_params (ModelParams): Initial values for the parameters.
             pen (Callable[[ModelParams], torch.Tensor] | None, optional): The penalization function. Defaults to None.
-            n_quad (int, optional): The used numnber of points for Gauss-Legendre quadrature. Defaults to 16.
+            n_quad (int, optional): The used numnber of points for Gauss-Legendre quadrature. Defaults to 32.
             cache_limit (int, optional): The max length of cache.
-            n_bissect (int, optional): The number of bissection steps used in transition sampling. Defaults to 16.
+            n_bissect (int, optional): The number of bissection steps used in transition sampling. Defaults to 32.
 
         Raises:
             TypeError: If pen is not None and is not callable.
@@ -225,13 +225,13 @@ class MultiStateJointModel(HazardMixin):
         optimizer_params: Dict[str, Any] = {"lr": 1e-2},
         *,
         n_iter: int = 2000,
-        batch_size: int = 2,
+        batch_size: int = 1,
         callback: Callable[[], None] | None = None,
         init_step_size: float = 0.1,
         adapt_rate: float = 0.01,
         accept_target: float = 0.234,
         init_warmup: int = 500,
-        cont_warmup: int = 2,
+        cont_warmup: int = 5,
     ) -> None:
         """Fits the MultiStateJointModel.
 
@@ -240,13 +240,13 @@ class MultiStateJointModel(HazardMixin):
             optimizer (type[torch.optim.Optimizer], optional): The stochastic optimizer constructor. Defaults to torch.optim.Adam.
             optimizer_params (_type_, optional): Optimizer parameter dict. Defaults to {"lr": 1e-2}.
             n_iter (int, optional): Number of iterations for optimization. Defaults to 2000.
-            batch_size (int, optional): Batch size used in fitting. Defaults to 2.
+            batch_size (int, optional): Batch size used in fitting. Defaults to 1.
             callback (Callable[[], None] | None, optional): A callback function that can be used to track the optimization. Defaults to None.
             init_step_size (float, optional): Kernel standard error in Metropolis Hastings. Defaults to 0.1.
             adapt_rate (float, optional): Adaptation rate for the step_size. Defaults to 0.01.
             target_accept_rate (float, optional): Mean acceptation target. Defaults to 0.234.
             init_warmup (int, optional): The number of iteration steps used in the warmup. Defaults to 500.
-            cont_warmup (int, optional): The warmup step in-between each parameter changes. Defaults to 2.
+            cont_warmup (int, optional): The warmup step in-between each parameter changes. Defaults to 5.
 
         Raises:
             ValueError: If batch_size is not greater than 0.
@@ -320,7 +320,7 @@ class MultiStateJointModel(HazardMixin):
         adapt_rate: float = 0.01,
         accept_target: float = 0.234,
         init_warmup: int = 500,
-        cont_warmup: int = 2,
+        cont_warmup: int = 5,
     ) -> None:
         """Computes the Fisher Information Matrix.
 
@@ -331,7 +331,7 @@ class MultiStateJointModel(HazardMixin):
             adapt_rate (float, optional): Adaptation rate for the step_size. Defaults to 0.01.
             target_accept_rate (float, optional): Mean acceptation target. Defaults to 0.234.
             init_warmup (int, optional): The number of iteration steps used in the warmup. Defaults to 500.
-            cont_warmup (int, optional): The warmup step in-between each parameter changes. Defaults to 2.
+            cont_warmup (int, optional): The warmup step in-between each parameter changes. Defaults to 5.
         """
 
         if not self.fit_:
@@ -666,7 +666,7 @@ class MultiStateJointModel(HazardMixin):
         adapt_rate: float = 0.01,
         accept_target: float = 0.234,
         init_warmup: int = 500,
-        cont_warmup: int = 2,
+        cont_warmup: int = 5,
     ) -> list[torch.Tensor]:
         """Predicts the survival (event free) probabilities for new individuals.
 
@@ -678,7 +678,7 @@ class MultiStateJointModel(HazardMixin):
             adapt_rate (float, optional): Adaptation rate for the step_size. Defaults to 0.01.
             accept_target (float, optional): Mean acceptation target. Defaults to 0.234.
             init_warmup (int, optional): The number of iteration steps used in the warmup. Defaults to 500.
-            cont_warmup (int, optional): The warmup step in-between each parameter changes. Defaults to 2.
+            cont_warmup (int, optional): The warmup step in-between each parameter changes. Defaults to 5.
             max_length (int, optional): Maximum iterations or sampling (prevents infinite loops). Defaults to 100.
 
         Raises:
@@ -744,7 +744,7 @@ class MultiStateJointModel(HazardMixin):
         adapt_rate: float = 0.01,
         accept_target: float = 0.234,
         init_warmup: int = 500,
-        cont_warmup: int = 2,
+        cont_warmup: int = 5,
         max_length: int = 100,
     ) -> list[list[list[Trajectory]]]:
         """Predict survival trajectories for new individuals.
@@ -758,7 +758,7 @@ class MultiStateJointModel(HazardMixin):
             adapt_rate (float, optional): Adaptation rate for the step_size. Defaults to 0.01.
             accept_target (float, optional): Mean acceptation target. Defaults to 0.234.
             init_warmup (int, optional): The number of iteration steps used in the warmup. Defaults to 500.
-            cont_warmup (int, optional): The warmup step in-between each parameter changes. Defaults to 2.
+            cont_warmup (int, optional): The warmup step in-between each parameter changes. Defaults to 5.
             max_length (int, optional): Maximum iterations or sampling (prevents infinite loops). Defaults to 100.
 
         Raises:
