@@ -225,13 +225,13 @@ class MultiStateJointModel(HazardMixin):
         optimizer_params: Dict[str, Any] = {"lr": 1e-2},
         *,
         n_iter: int = 2000,
-        batch_size: int = 5,
+        batch_size: int = 2,
         callback: Callable[[], None] | None = None,
         init_step_size: float = 0.1,
         adapt_rate: float = 0.01,
         accept_target: float = 0.234,
         init_warmup: int = 500,
-        cont_warmup: int = 5,
+        cont_warmup: int = 2,
     ) -> None:
         """Fits the MultiStateJointModel.
 
@@ -240,13 +240,13 @@ class MultiStateJointModel(HazardMixin):
             optimizer (type[torch.optim.Optimizer], optional): The stochastic optimizer constructor. Defaults to torch.optim.Adam.
             optimizer_params (_type_, optional): Optimizer parameter dict. Defaults to {"lr": 1e-2}.
             n_iter (int, optional): Number of iterations for optimization. Defaults to 2000.
-            batch_size (int, optional): Batch size used in fitting. Defaults to 5.
+            batch_size (int, optional): Batch size used in fitting. Defaults to 2.
             callback (Callable[[], None] | None, optional): A callback function that can be used to track the optimization. Defaults to None.
             init_step_size (float, optional): Kernel standard error in Metropolis Hastings. Defaults to 0.1.
             adapt_rate (float, optional): Adaptation rate for the step_size. Defaults to 0.01.
             target_accept_rate (float, optional): Mean acceptation target. Defaults to 0.234.
             init_warmup (int, optional): The number of iteration steps used in the warmup. Defaults to 500.
-            cont_warmup (int, optional): The warmup step in-between each parameter changes. Defaults to 5.
+            cont_warmup (int, optional): The warmup step in-between each parameter changes. Defaults to 2.
 
         Raises:
             ValueError: If batch_size is not greater than 0.
@@ -311,7 +311,7 @@ class MultiStateJointModel(HazardMixin):
         self.fit_ = True
         self.clear_cache()
 
-    def _compute_fim(
+    def compute_fim(
         self,
         data: ModelData,
         *,
@@ -320,7 +320,7 @@ class MultiStateJointModel(HazardMixin):
         adapt_rate: float = 0.01,
         accept_target: float = 0.234,
         init_warmup: int = 500,
-        cont_warmup: int = 5,
+        cont_warmup: int = 2,
     ) -> None:
         """Computes the Fisher Information Matrix.
 
@@ -331,7 +331,7 @@ class MultiStateJointModel(HazardMixin):
             adapt_rate (float, optional): Adaptation rate for the step_size. Defaults to 0.01.
             target_accept_rate (float, optional): Mean acceptation target. Defaults to 0.234.
             init_warmup (int, optional): The number of iteration steps used in the warmup. Defaults to 500.
-            cont_warmup (int, optional): The warmup step in-between each parameter changes. Defaults to 5.
+            cont_warmup (int, optional): The warmup step in-between each parameter changes. Defaults to 2.
         """
 
         if not self.fit_:
@@ -666,7 +666,7 @@ class MultiStateJointModel(HazardMixin):
         adapt_rate: float = 0.01,
         accept_target: float = 0.234,
         init_warmup: int = 500,
-        cont_warmup: int = 5,
+        cont_warmup: int = 2,
     ) -> list[torch.Tensor]:
         """Predicts the survival (event free) probabilities for new individuals.
 
@@ -678,7 +678,7 @@ class MultiStateJointModel(HazardMixin):
             adapt_rate (float, optional): Adaptation rate for the step_size. Defaults to 0.01.
             accept_target (float, optional): Mean acceptation target. Defaults to 0.234.
             init_warmup (int, optional): The number of iteration steps used in the warmup. Defaults to 500.
-            cont_warmup (int, optional): The warmup step in-between each parameter changes. Defaults to 5.
+            cont_warmup (int, optional): The warmup step in-between each parameter changes. Defaults to 2.
             max_length (int, optional): Maximum iterations or sampling (prevents infinite loops). Defaults to 100.
 
         Raises:
@@ -690,14 +690,6 @@ class MultiStateJointModel(HazardMixin):
         """
 
         try:
-            # Check self.params_.betas and data.x types
-            if (self.params_.betas is None and pred_data.x is not None) or (
-                self.params_.betas is not None and pred_data.x is None
-            ):
-                raise TypeError(
-                    "self.params_.betas and data.x should be either both None, or neither"
-                )
-
             # Convert and check if c_max matches the right shape
             u = torch.as_tensor(u, dtype=torch.float32)
             if u.ndim != 2 or u.shape[0] != pred_data.size:
@@ -734,9 +726,11 @@ class MultiStateJointModel(HazardMixin):
 
                 predicted_log_probs.append(current_log_probs)
 
+            self.clear_cache()
             return predicted_log_probs
 
         except Exception as e:
+            self.clear_cache()
             raise RuntimeError(f"Error in survival prediction: {e}") from e
 
     def predict_trajectories(
@@ -750,7 +744,7 @@ class MultiStateJointModel(HazardMixin):
         adapt_rate: float = 0.01,
         accept_target: float = 0.234,
         init_warmup: int = 500,
-        cont_warmup: int = 5,
+        cont_warmup: int = 2,
         max_length: int = 100,
     ) -> list[list[list[Trajectory]]]:
         """Predict survival trajectories for new individuals.
@@ -764,7 +758,7 @@ class MultiStateJointModel(HazardMixin):
             adapt_rate (float, optional): Adaptation rate for the step_size. Defaults to 0.01.
             accept_target (float, optional): Mean acceptation target. Defaults to 0.234.
             init_warmup (int, optional): The number of iteration steps used in the warmup. Defaults to 500.
-            cont_warmup (int, optional): The warmup step in-between each parameter changes. Defaults to 5.
+            cont_warmup (int, optional): The warmup step in-between each parameter changes. Defaults to 2.
             max_length (int, optional): Maximum iterations or sampling (prevents infinite loops). Defaults to 100.
 
         Raises:
@@ -776,14 +770,6 @@ class MultiStateJointModel(HazardMixin):
         """
 
         try:
-            # Check self.params_.betas and data.x types
-            if (self.params_.betas is None and pred_data.x is not None) or (
-                self.params_.betas is not None and pred_data.x is None
-            ):
-                raise TypeError(
-                    "self.params_.betas and data.x should be either both None, or neither"
-                )
-
             # Convert and check if c_max matches the right shape
             c_max = torch.as_tensor(c_max, dtype=torch.float32)
             if c_max.shape != (pred_data.size,):

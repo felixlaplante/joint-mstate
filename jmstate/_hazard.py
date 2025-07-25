@@ -6,9 +6,6 @@ from .types import BaseHazardFn, LinkFn
 from ._utils import legendre_quad
 
 
-_EMPTY_CACHE: dict[str, dict[Any, torch.Tensor]] = {"half": {}, "quad": {}, "base": {}}
-
-
 class HazardMixin:
     """Mixin class for hazard model computations."""
 
@@ -24,7 +21,11 @@ class HazardMixin:
         self.cache_limit = cache_limit
 
         self._std_nodes, self._std_weights = legendre_quad(n_quad)
-        self._cache = _EMPTY_CACHE
+        self._cache: dict[str, dict[Any, torch.Tensor]] = {
+            "half": {},
+            "quad": {},
+            "base": {},
+        }
 
     def _get_cache(self, name: str, key: Any) -> torch.Tensor:
         """Gets the cache [name][key]
@@ -53,7 +54,7 @@ class HazardMixin:
     def clear_cache(self) -> None:
         """Clears the cached tensors"""
 
-        self._cache = _EMPTY_CACHE
+        self._cache = {"half": {}, "quad": {}, "base": {}}
 
     def _log_hazard(
         self,
@@ -85,11 +86,12 @@ class HazardMixin:
         # Compute baseline hazard
         key = (
             id(log_base_hazard_fn),
-            id(t0.untyped_storage()),
-            id(t1.untyped_storage()),
+            id(t0),
+            id(t1),
         )
         try:
             base = self._get_cache("base", key)
+
         except:
             base = log_base_hazard_fn(t0, t1)
             self._add_cache("base", key, base)
@@ -144,7 +146,7 @@ class HazardMixin:
         )
 
         # Transform to quadrature interval
-        key = (id(c.untyped_storage()), id(t1.untyped_storage()))
+        key = (id(c), id(t1))
         try:
             half = self._get_cache("half", key)
             quad = self._get_cache("quad", key)
@@ -204,9 +206,9 @@ class HazardMixin:
         t0, t1 = t0.view(-1, 1), t1.view(-1, 1)
 
         # Transform to quadrature interval
-        key = (id(t0.untyped_storage()), id(t1.untyped_storage()))
+        key = (id(t0), id(t1))
         try:
-            half = self._get_cache("half", key)
+            half = self._cache["half"][key]
             quad = self._get_cache("quad", key)
 
         except:
