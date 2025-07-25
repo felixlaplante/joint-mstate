@@ -1,10 +1,35 @@
 import itertools
 from collections import defaultdict
-from typing import Any, DefaultDict
+from typing import Any, DefaultDict, cast
 
+import numpy as np
 import torch
 
 from .types import *
+
+
+def legendre_quad(n_quad: int) -> tuple[torch.Tensor, ...]:
+    """Get the Legendre quadrature nodes and weights.
+
+    Args:
+        n_quad (int, optional): The number of quadrature points.
+
+    Returns:
+        tuple[torch.Tensor, ...]: The nodes and weights.
+    """
+
+    nodes, weights = cast(
+        tuple[
+            np.ndarray[Any, np.dtype[np.float32]],
+            np.ndarray[Any, np.dtype[np.float32]],
+        ],
+        np.polynomial.legendre.leggauss(n_quad),  #  type: ignore
+    )
+
+    std_nodes = torch.tensor(nodes, dtype=torch.float32)
+    std_weights = torch.tensor(weights, dtype=torch.float32)
+
+    return std_nodes, std_weights
 
 
 def flat_from_tril(L: torch.Tensor) -> torch.Tensor:

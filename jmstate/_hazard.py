@@ -1,44 +1,22 @@
 from typing import Any, cast
 
-import numpy as np
 import torch
 
 from .types import BaseHazardFn, LinkFn
+from ._utils import legendre_quad
 
 
 class HazardMixin:
     """Mixin class for hazard model computations."""
 
     def __init__(self, n_quad: int):
-        self._std_nodes, self._std_weights = self._legendre_quad(n_quad)
+        self._std_nodes, self._std_weights = legendre_quad(n_quad)
 
         self._cache: dict[str, dict[Any, torch.Tensor]] = {"quad": {}, "base": {}}
 
-    @staticmethod
-    def _legendre_quad(n_quad: int) -> tuple[torch.Tensor, ...]:
-        """Get the Legendre quadrature nodes and weights.
-
-        Args:
-            n_quad (int, optional): The number of quadrature points.
-
-        Returns:
-            tuple[torch.Tensor, ...]: The nodes and weights.
-        """
-        nodes, weights = cast(
-            tuple[
-                np.ndarray[Any, np.dtype[np.float32]],
-                np.ndarray[Any, np.dtype[np.float32]],
-            ],
-            np.polynomial.legendre.leggauss(n_quad),  #  type: ignore
-        )
-
-        std_nodes = torch.tensor(nodes, dtype=torch.float32)
-        std_weights = torch.tensor(weights, dtype=torch.float32)
-
-        return std_nodes, std_weights
-
     def clear_cache(self) -> None:
         """Clears the cached tensors"""
+
         self._cache = {"quad": {}, "base": {}}
 
     def _log_hazard(
