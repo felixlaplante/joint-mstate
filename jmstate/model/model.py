@@ -147,7 +147,7 @@ class MultiStateJointModel(LongitudinalMixin, HazardMixin):
         n_iter: int = 2000,
         batch_size: int = 1,
         callback: (
-            Callable[["MultiStateJointModel", MetropolisHastingsSampler], None] | None
+            Callable[[ModelParams, MetropolisHastingsSampler], None] | None
         ) = None,
         init_step_size: float = 0.1,
         adapt_rate: float = 0.01,
@@ -163,7 +163,7 @@ class MultiStateJointModel(LongitudinalMixin, HazardMixin):
             optimizer_params (_type_, optional): Optimizer parameter dict. Defaults to {"lr": 1e-2}.
             n_iter (int, optional): Number of iterations for optimization. Defaults to 2000.
             batch_size (int, optional): Batch size used in fitting. Defaults to 1.
-            callback (Callable[[], None] | None, optional): A callback function that can be used to track the optimization. Defaults to None.
+            callback (Callable[[ModelParams, MetropolisHastingsSampler], None] | None, optional): A callback function that can be used to track the optimization. Defaults to None.
             init_step_size (float, optional): Kernel standard error in Metropolis Hastings. Defaults to 0.1.
             adapt_rate (float, optional): Adaptation rate for the step_size. Defaults to 0.01.
             target_accept_rate (float, optional): Mean acceptation target. Defaults to 0.234.
@@ -210,7 +210,7 @@ class MultiStateJointModel(LongitudinalMixin, HazardMixin):
             optimizer_instance.step()
 
             if callback is not None:
-                callback(self, sampler)
+                callback(self.params_, sampler)
 
         # Main fitting loop
         sampler.loop(n_iter, cont_warmup, _fit, desc="Fitting joint model")
@@ -269,7 +269,6 @@ class MultiStateJointModel(LongitudinalMixin, HazardMixin):
 
         def _compute_fim():
             nonlocal fim
-
             _, current_ll = sampler.step()
             nll_pen = -current_ll.sum() + self.pen(self.params_)
 
